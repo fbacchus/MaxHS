@@ -1,0 +1,10 @@
+BUILD_DIR?=build
+MAXHS_RELSYM?=-g
+MAXHS_REL?=-O3 -D NDEBUG
+MAXHS_DEB?=-O0 -D DEBUG 
+MAXHS_PRF?=-O3 -D NDEBUG
+CPLEXLIBDIR?=/pkgs/ilog/cplex125/cplex/lib/x86-64_sles10_4.1/static_pic
+CONCERTLIBDIR?=/pkgs/ilog/cplex125/concert/lib/x86-64_sles10_4.1/static_pic
+CONCERTINCDIR?=/pkgs/ilog/cplex125/concert/include
+CPLEXINCDIR?=/pkgs/ilog/cplex125/cplex/include
+prefix?=/u/fbacchus/MaxSatLib/MaxHS
