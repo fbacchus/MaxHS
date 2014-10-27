@@ -43,7 +43,7 @@ class RegionAllocator
     // TODO: make this a class for better type-checking?
     typedef uint32_t Ref;
     enum { Ref_Undef = UINT32_MAX };
-    enum { Unit_Size = sizeof(uint32_t) };
+    enum { Unit_Size = sizeof(T) };
 
     explicit RegionAllocator(uint32_t start_cap = 1024*1024) : memory(NULL), sz(0), cap(0), wasted_(0){ capacity(start_cap); }
     ~RegionAllocator()
@@ -60,11 +60,11 @@ class RegionAllocator
     void     free      (int size)    { wasted_ += size; }
 
     // Deref, Load Effective Address (LEA), Inverse of LEA (AEL):
-    T&       operator[](Ref r)       { assert(r >= 0 && r < sz); return memory[r]; }
-    const T& operator[](Ref r) const { assert(r >= 0 && r < sz); return memory[r]; }
+    T&       operator[](Ref r)       { assert(r < sz); return memory[r]; }
+    const T& operator[](Ref r) const { assert(r < sz); return memory[r]; }
 
-    T*       lea       (Ref r)       { assert(r >= 0 && r < sz); return &memory[r]; }
-    const T* lea       (Ref r) const { assert(r >= 0 && r < sz); return &memory[r]; }
+    T*       lea       (Ref r)       { assert(r < sz); return &memory[r]; }
+    const T* lea       (Ref r) const { assert(r < sz); return &memory[r]; }
     Ref      ael       (const T* t)  { assert((void*)t >= (void*)&memory[0] && (void*)t < (void*)&memory[sz-1]);
         return  (Ref)(t - &memory[0]); }
 

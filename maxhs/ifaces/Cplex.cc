@@ -22,16 +22,14 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
 
-#ifndef CPLEX_H
-#include "maxhs/Cplex.h"
-#endif
-
+#include "maxhs/ifaces/Cplex.h"
 #include "minisat/utils/Options.h"
-
 #include "minisat/utils/System.h"
 
 #include <iostream>
 #include <stdexcept>
+
+using namespace MaxHS;
 
 static const char* category_mwhs_cplex = "Cplex";
 
@@ -79,7 +77,7 @@ Cplex::~Cplex(){
 }
 
 // costs specifies the cost incurred if the satvar is truthified (set to 1)
-void Cplex::initCplex(vector<int> &satvars, vector<Weight> &costs){
+void Cplex::initCplex(const vector<int> &satvars, const vector<Weight> &costs){
    
     for (size_t i = 0; i < satvars.size(); i++) {
         int satvar = satvars[i];
@@ -99,6 +97,7 @@ void Cplex::initCplex(vector<int> &satvars, vector<Weight> &costs){
 
     cplex.setParam(IloCplex::EpAGap, 0);
     cplex.setParam(IloCplex::EpGap, 0);
+    cplex.setParam(IloCplex::AdvInd, 1);
 
     if (cplex_threads_off) {
         cplex.setParam(IloCplex::Threads, 1);
@@ -127,10 +126,10 @@ void Cplex::initCplex(vector<int> &satvars, vector<Weight> &costs){
     */
 }
 
-bool Cplex::add_clausal_constraint(vec<Lit> &theCon){
+bool Cplex::add_clausal_constraint(vector<Lit> &theCon){
     IloExpr expr(env);
     int numNeg = 0;
-    for(int i = 0; i < theCon.size(); i++) {
+    for(size_t i = 0; i < theCon.size(); i++) {
         int cplexvarindex = satvar_to_cplexvar[var(theCon[i])];
         IloBoolVar &boolvar = bool_variables[cplexvarindex];
         if (sign(theCon[i])) {
@@ -153,7 +152,7 @@ bool Cplex::add_clausal_constraint(vec<Lit> &theCon){
 
     return (numNeg > 0);
 }
-void Cplex::add_impl_constraint(Lit blit, vec<Lit> &theCon){
+void Cplex::add_impl_constraint(Lit blit, vector<Lit> &theCon){
     IloExpr expr(env);
     int k = -theCon.size();
     IloBoolVar blitvar = bool_variables[satvar_to_cplexvar[var(blit)]];
@@ -163,7 +162,7 @@ void Cplex::add_impl_constraint(Lit blit, vec<Lit> &theCon){
     } else {
         expr += k * blitvar;
     }
-    for(int i = 0; i < theCon.size(); i++) {
+    for(size_t i = 0; i < theCon.size(); i++) {
         int cplexvarindex = satvar_to_cplexvar[var(theCon[i])];
         IloBoolVar &boolvar = bool_variables[cplexvarindex];
         if (sign(theCon[i])) {
@@ -215,6 +214,7 @@ Weight Cplex::solve(vector<vector<Lit> > &solutions) {
         // CPXMIP_OPTIMAL_TOP means that an optimal solution was found within the EpGap or EpAGap
         if (status == CPX_STAT_OPTIMAL || status == CPXMIP_OPTIMAL_TOL) {
             objval = cplex.getObjValue();
+	    //printf("Cplex solved objval = %0.lf\n", objval); fflush(stdout);
             if (cplex_nsoln > 1) {
                 cplex.populate(); 
             }
@@ -225,6 +225,7 @@ Weight Cplex::solve(vector<vector<Lit> > &solutions) {
                 solutions.resize(maxSize);
                 for (int i = 0; (i < maxSize && objval >= 0); i++) {
                     if (!getSolutionAtIndex(solutions[i], cplex_nsoln > 1 ? i : -1)) {
+		      //printf("failed to get a solution = %d\n", i); fflush(stdout);
                         objval = -1;
                         solutions.resize(i);
                     }
@@ -237,12 +238,13 @@ Weight Cplex::solve(vector<vector<Lit> > &solutions) {
             }
         } else {
             objval = -1;
-            //printf("status = %d\n", status); fflush(stdout);
+            //printf("Unexpected status = %d\n", status); fflush(stdout);
         }
-    } /*else {
-        printf("status = %d\n", cplex.getCplexStatus()); fflush(stdout);
-
-    }*/
+    }
+    else {
+      //printf("Cplex failed to solve status = %d\n", cplex.getCplexStatus()); fflush(stdout);
+    }
+    
     totalTime += cpuTime() - startTime;
     
     return objval;

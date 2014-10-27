@@ -1,4 +1,4 @@
-/***********[Output.h]
+/***********[MaxSolverTypes.h]
 Copyright (c) 2012-2013 Jessica Davies, Fahiem Bacchus
 
 Permission is hereby granted, free of charge, to any person obtaining a
@@ -22,11 +22,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
 
-#define toString(x) (static_cast<ostringstream*>( &(ostringstream() <<  x) )->str())
+#ifndef MaxSolverTypes_h
+#define MaxSolverTypes_h
 
-string csv_errors; 
-string csv_comments;
+namespace MaxHS { 
+typedef double Weight;
+} //namespace
 
-void printOutput(const char *msg, Weight val, bool csv_output);
-void printOutput(const char *msg, const char *val, bool csv_output);
-void printError(const char *msg, bool csv_output);
+#endif

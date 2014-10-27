@@ -70,8 +70,9 @@ MAXHS_SLIB = lib$(MAXHS).a#  Name of Maxhs static library.
 #-DIL_STD is a IBM/CPLEX issue
 
 MAXHS_CXXFLAGS = -DIL_STD -I. -I$(CPLEXINCDIR) -I$(CONCERTINCDIR) 
-MAXHS_CXXFLAGS += -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS -Wall
-MAXHS_CXXFLAGS += -Wno-parentheses -Wextra 
+MAXHS_CXXFLAGS += -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS 
+MAXHS_CXXFLAGS += -Wall -Wno-parentheses -Wextra -Wno-deprecated
+MAXHS_CXXFLAGS += -std=c++0x
 
 MAXHS_LDFLAGS  = -Wall -lz -L$(CPLEXLIBDIR) -L$(CONCERTLIBDIR) -lilocplex -lcplex -lconcert -lpthread
 
@@ -83,10 +84,11 @@ else
 VERB=
 endif
 
-SRCS = $(wildcard minisat/core/*.cc) $(wildcard minisat/utils/*.cc) $(wildcard maxhs/*.cc)
+SRCS = $(wildcard minisat/core/*.cc) $(wildcard minisat/utils/*.cc) \
+       $(wildcard maxhs/core/*.cc) $(wildcard maxhs/ifaces/*.cc)
 MINISAT_HDRS = $(wildcard minisat/mtl/*.h) $(wildcard minisat/core/*.h) \
        $(wildcard minisat/utils/*.h) 
-MAXHS_HDRS = $(wildcard maxhs/*.h)
+MAXHS_HDRS = $(wildcard maxhs/core/*.h) $(wildcard maxhs/ifaces/*.h)
 
 OBJS = $(filter-out %Main.o, $(SRCS:.cc=.o))
 
@@ -101,7 +103,7 @@ lp:	$(BUILD_DIR)/profile/lib/$(MAXHS_SLIB)
 
 ## Build-type Compile-flags:
 $(BUILD_DIR)/release/%.o:			MAXHS_CXXFLAGS +=$(MAXHS_REL) $(MAXHS_RELSYM)
-$(BUILD_DIR)/debug/%.o:				MAXHS_CXXFLAGS +=$(MAXHS_DEB) -g
+$(BUILD_DIR)/debug/%.o:				MAXHS_CXXFLAGS +=$(MAXHS_DEB) -ggdb
 $(BUILD_DIR)/profile/%.o:			MAXHS_CXXFLAGS +=$(MAXHS_PRF) -pg
 
 ## Build-type Link-flags:
@@ -109,9 +111,9 @@ $(BUILD_DIR)/profile/bin/$(MAXHS):		MAXHS_LDFLAGS += -pg
 $(BUILD_DIR)/release/bin/$(MAXHS):		MAXHS_LDFLAGS += --static -z muldefs $(MAXHS_RELSYM)
 
 ## Executable dependencies
-$(BUILD_DIR)/release/bin/$(MAXHS):	 	$(BUILD_DIR)/release/maxhs/Main.o $(BUILD_DIR)/release/lib/$(MAXHS_SLIB)
-$(BUILD_DIR)/debug/bin/$(MAXHS):	 	$(BUILD_DIR)/debug/maxhs/Main.o $(BUILD_DIR)/debug/lib/$(MAXHS_SLIB)
-$(BUILD_DIR)/profile/bin/$(MAXHS):	 	$(BUILD_DIR)/profile/maxhs/Main.o $(BUILD_DIR)/profile/lib/$(MAXHS_SLIB)
+$(BUILD_DIR)/release/bin/$(MAXHS):	 	$(BUILD_DIR)/release/maxhs/core/Main.o $(BUILD_DIR)/release/lib/$(MAXHS_SLIB)
+$(BUILD_DIR)/debug/bin/$(MAXHS):	 	$(BUILD_DIR)/debug/maxhs/core/Main.o $(BUILD_DIR)/debug/lib/$(MAXHS_SLIB)
+$(BUILD_DIR)/profile/bin/$(MAXHS):	 	$(BUILD_DIR)/profile/maxhs/core/Main.o $(BUILD_DIR)/profile/lib/$(MAXHS_SLIB)
 
 ## Library dependencies
 $(BUILD_DIR)/release/lib/$(MAXHS_SLIB):	$(foreach o,$(OBJS),$(BUILD_DIR)/release/$(o))
@@ -153,10 +155,14 @@ install-debug:	install-headers install-lib-debug
 install-headers:
 #       Create directories
 	$(INSTALL) -d $(DESTDIR)$(includedir)/maxhs
+#
+	for dir in maxhs/core maxhs/ifaces; do \
+  	  $(INSTALL) -d $(DESTDIR)$(includedir)/$$dir ; \
+        done
 	for dir in minisat/mtl minisat/utils minisat/core; do \
 	  $(INSTALL) -d $(DESTDIR)$(includedir)/maxhs/$$dir ; \
 	done
-#       Install headers
+# Install headers
 	for h in $(MINISAT_HDRS) ; do \
 	  $(INSTALL) -m 644 $$h $(DESTDIR)$(includedir)/maxhs/$$h ; \
 	done

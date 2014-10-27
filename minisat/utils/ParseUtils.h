@@ -26,30 +26,34 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 #include <zlib.h>
 
-// JD for parseDouble
-#include <math.h>
+#include "minisat/mtl/XAlloc.h"
 
 namespace Minisat {
 
 //-------------------------------------------------------------------------------------------------
 // A simple buffered character stream class:
 
-static const int buffer_size = 1048576;
 
 
 class StreamBuffer {
-    gzFile        in;
-    unsigned char buf[buffer_size];
-    int           pos;
-    int           size;
+    gzFile         in;
+    unsigned char* buf;
+    int            pos;
+    int            size;
+
+    enum { buffer_size = 64*1024 };
 
     void assureLookahead() {
         if (pos >= size) {
             pos  = 0;
-            size = gzread(in, buf, sizeof(buf)); } }
+            size = gzread(in, buf, buffer_size); } }
 
 public:
-    explicit StreamBuffer(gzFile i) : in(i), pos(0), size(0) { assureLookahead(); }
+    explicit StreamBuffer(gzFile i) : in(i), pos(0), size(0){
+        buf = (unsigned char*)xrealloc(NULL, buffer_size);
+        assureLookahead();
+    }
+    ~StreamBuffer() { free(buf); }
 
     int  operator *  () const { return (pos >= size) ? EOF : buf[pos]; }
     void operator ++ ()       { pos++; assureLookahead(); }
@@ -93,51 +97,6 @@ static int parseInt(B& in) {
     while (*in >= '0' && *in <= '9')
         val = val*10 + (*in - '0'),
         ++in;
-    return neg ? -val : val; }
-
-// JD
-template<class B>
-static double parseIntegerDouble(B& in) {
-    double     val = 0;
-    bool    neg = false;
-    skipWhitespace(in);
-    if      (*in == '-') neg = true, ++in;
-    else if (*in == '+') ++in;
-    if (*in < '0' || *in > '9') fprintf(stderr, "PARSE ERROR! Unexpected char: %c\n", *in), exit(3);
-    while (*in >= '0' && *in <= '9')
-        val = val*10 + (*in - '0'),
-        ++in;
-    return neg ? -val : val; }
-
-
-// JD
-template<class B>
-static double parseDouble(B& in) {
-    double     val = 0;
-    bool    neg = false;
-    bool    frac = false;
-    int exponent = 0;
-    int n = -1;
-    skipWhitespace(in);
-    if      (*in == '-') neg = true, ++in;
-    else if (*in == '+') ++in;
-    if ((*in < '0' || *in > '9') && *in != '.' && *in != 'e' && *in != '-' && *in != '+') fprintf(stderr, "PARSE ERROR 3! Unexpected char: %c\n", *in), exit(3);
-    while ((*in >= '0' && *in <= '9') || *in == '.' || *in == 'e' || *in == '-' || *in == '+') {
-	if (*in == '.') frac = true;
-        else if (*in == 'e') {
-          bool expNeg = false;
-          ++in;
-          while (*in == '-' || *in == '0' || *in == '+') {
-            if (*in == '-') expNeg = true;
-            ++in; 
-          }
-          int intExp = parseInt(in);
-          exponent = expNeg ? -intExp : intExp;
-        }
-	else frac ? val = val + (*in - '0')*pow(10.0,n), --n : val = val*10 + (*in - '0');
-        ++in;
-    }
-    val = val * pow(10, exponent);
     return neg ? -val : val; }
 
 

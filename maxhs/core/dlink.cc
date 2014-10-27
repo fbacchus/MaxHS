@@ -22,14 +22,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
 
-#ifndef DLINK_H
-#include "maxhs/dlink.h"
-#endif
-
-
+#include "maxhs/core/dlink.h"
 #include <stdio.h>
 #include <algorithm>
 #include <queue>
+
+using namespace MaxHS;
 
 uint64_t dlink_node::next_id = 1;
 
@@ -212,7 +210,7 @@ void dlink_matrix::use_col(int name, vector<int> &removedrows) {
    dlink_node *head = id_to_col[name];
    if (head == NULL) {
 #endif
-       fprintf(stderr, "c ERROR: dlink_matrix::use_col: did not find column with name %d\n", name);
+       fprintf(stdout, "c ERROR: dlink_matrix::use_col: did not find column with name %d\n", name);
        fflush(stdout);
        fflush(stderr);
        exit(0);
@@ -249,7 +247,7 @@ void dlink_matrix::ulink_row(dlink_node *row) {
         dlink_node *cur2 = cur->d;
         while (cur2 != cur) {
             if (cur2->rowhead->name == rowname) {
-                fprintf(stderr, "c ERROR: unlinked row %d is still in column %d\n", rowname, cur->name);
+                fprintf(stdout, "c ERROR: unlinked row %d is still in column %d\n", rowname, cur->name);
                 //return false;
             } 
             cur2 = cur2->d;
@@ -284,7 +282,7 @@ void dlink_matrix::ulink_col(dlink_node *col, vector<int> &newsingletons) {
         dlink_node *cur2 = cur->r;
         while (cur2 != cur) {
             if (cur2->colhead->name == colname) {
-                fprintf(stderr, "c ERROR: unlinked col %d is still in row %d\n", colname, cur->name);
+                fprintf(stdout, "c ERROR: unlinked col %d is still in row %d\n", colname, cur->name);
                 //return false;
             } 
             cur2 = cur2->r;

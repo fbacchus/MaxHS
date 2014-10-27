@@ -1,4 +1,4 @@
-/****************************************************************************************[SolverTypes.h]
+/***********************************************************************************[SolverTypes.h]
 Copyright (c) 2003-2006, Niklas Een, Niklas Sorensson
 Copyright (c) 2007-2010, Niklas Sorensson
 
@@ -18,6 +18,7 @@ DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 **************************************************************************************************/
 
+
 #ifndef Minisat_SolverTypes_h
 #define Minisat_SolverTypes_h
 
@@ -26,15 +27,25 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "minisat/mtl/IntTypes.h"
 #include "minisat/mtl/Alg.h"
 #include "minisat/mtl/Vec.h"
+#include "minisat/mtl/IntMap.h"
 #include "minisat/mtl/Map.h"
 #include "minisat/mtl/Alloc.h"
 
 namespace Minisat {
 
-typedef double Weight;
+//=================================================================================================
+// Variables, literals, lifted booleans, clauses:
+
+
+// NOTE! Variables are just integers. No abstraction here. They should be chosen from 0..N,
+// so that they can be used as array indices.
 
 typedef int Var;
+#if defined(MINISAT_CONSTANTS_AS_MACROS)
 #define var_Undef (-1)
+#else
+  const Var var_Undef = -1;
+#endif
 
 
 struct Lit {
@@ -60,15 +71,17 @@ inline  int  toInt     (Var v)              { return v; }
 inline  int  toInt     (Lit p)              { return p.x; } 
 inline  Lit  toLit     (int i)              { Lit p; p.x = i; return p; } 
 
-// JD negate a literal represented as an integer (the int should have been obtained by toInt)
-inline  int  neg       (int l)              { return l ^ 1; }
-
 //const Lit lit_Undef = mkLit(var_Undef, false);  // }- Useful special constants.
 //const Lit lit_Error = mkLit(var_Undef, true );  // }
 
 const Lit lit_Undef = { -2 };  // }- Useful special constants.
 const Lit lit_Error = { -1 };  // }
 
+struct MkIndexLit { vec<Lit>::Size operator()(Lit l) const { return vec<Lit>::Size(l.x); } };
+
+template<class T> class VMap : public IntMap<Var, T>{};
+template<class T> class LMap : public IntMap<Lit, T, MkIndexLit>{};
+class LSet : public IntSet<Lit, MkIndexLit>{};
 
 //=================================================================================================
 // Lifted booleans:
@@ -77,10 +90,6 @@ const Lit lit_Error = { -1 };  // }
 //       between one variable and one constant. Some care had to be taken to make sure that gcc 
 //       does enough constant propagation to produce sensible code, and this appears to be somewhat
 //       fragile unfortunately.
-
-#define l_True  (lbool((uint8_t)0)) // gcc does not do constant propagation if these are real constants.
-#define l_False (lbool((uint8_t)1))
-#define l_Undef (lbool((uint8_t)2))
 
 class lbool {
     uint8_t value;
@@ -111,6 +120,17 @@ public:
 inline int   toInt  (lbool l) { return l.value; }
 inline lbool toLbool(int   v) { return lbool((uint8_t)v);  }
 
+#if defined(MINISAT_CONSTANTS_AS_MACROS)
+  #define l_True  (lbool((uint8_t)0)) // gcc does not do constant propagation if these are real constants.
+  #define l_False (lbool((uint8_t)1))
+  #define l_Undef (lbool((uint8_t)2))
+#else
+  const lbool l_True ((uint8_t)0);
+  const lbool l_False((uint8_t)1);
+  const lbool l_Undef((uint8_t)2);
+#endif
+
+
 //=================================================================================================
 // Clause -- a simple class for representing a clause:
 
@@ -123,14 +143,13 @@ class Clause {
         unsigned learnt    : 1;
         unsigned has_extra : 1;
         unsigned reloced   : 1;
-        unsigned size      : 27; }                            header;
+        unsigned size      : 27; }                        header;
     union { Lit lit; float act; uint32_t abs; CRef rel; } data[0];
 
     friend class ClauseAllocator;
 
     // NOTE: This constructor cannot be used directly (doesn't allocate enough memory).
-    template<class V>
-    Clause(const V& ps, bool use_extra, bool learnt) {
+    Clause(const vec<Lit>& ps, bool use_extra, bool learnt) {
         header.mark      = 0;
         header.learnt    = learnt;
         header.has_extra = use_extra;
@@ -142,9 +161,26 @@ class Clause {
 
         if (header.has_extra){
             if (header.learnt)
-                data[header.size].act = 0; 
+                data[header.size].act = 0;
+            else
+                calcAbstraction();
+    }
+    }
+
+    // NOTE: This constructor cannot be used directly (doesn't allocate enough memory).
+    Clause(const Clause& from, bool use_extra){
+        header           = from.header;
+        header.has_extra = use_extra;   // NOTE: the copied clause may lose the extra field.
+
+        for (int i = 0; i < from.size(); i++)
+            data[i].lit = from[i];
+
+        if (header.has_extra){
+            if (header.learnt)
+                data[header.size].act = from.data[header.size].act;
             else 
-                calcAbstraction(); }
+                data[header.size].abs = from.data[header.size].abs;
+    }
     }
 
 public:
@@ -164,6 +200,7 @@ public:
     uint32_t     mark        ()      const   { return header.mark; }
     void         mark        (uint32_t m)    { header.mark = m; }
     const Lit&   last        ()      const   { return data[header.size-1].lit; }
+
     bool         reloced     ()      const   { return header.reloced; }
     CRef         relocation  ()      const   { return data[0].rel; }
     void         relocate    (CRef c)        { header.reloced = 1; data[0].rel = c; }
@@ -185,46 +222,58 @@ public:
 //=================================================================================================
 // ClauseAllocator -- a simple class for allocating memory for clauses:
 
-
 const CRef CRef_Undef = RegionAllocator<uint32_t>::Ref_Undef;
-class ClauseAllocator : public RegionAllocator<uint32_t>
+class ClauseAllocator
 {
-    static int clauseWord32Size(int size, bool has_extra){
+    RegionAllocator<uint32_t> ra;
+
+    static uint32_t clauseWord32Size(int size, bool has_extra){
         return (sizeof(Clause) + (sizeof(Lit) * (size + (int)has_extra))) / sizeof(uint32_t); }
+
  public:
+    enum { Unit_Size = RegionAllocator<uint32_t>::Unit_Size };
+
     bool extra_clause_field;
 
-    ClauseAllocator(uint32_t start_cap) : RegionAllocator<uint32_t>(start_cap), extra_clause_field(false){}
+    ClauseAllocator(uint32_t start_cap) : ra(start_cap), extra_clause_field(false){}
     ClauseAllocator() : extra_clause_field(false){}
 
     void moveTo(ClauseAllocator& to){
         to.extra_clause_field = extra_clause_field;
-        RegionAllocator<uint32_t>::moveTo(to); }
+        ra.moveTo(to.ra); }
 
-    template<class Lits>
-    CRef alloc(const Lits& ps, bool learnt = false)
+    CRef alloc(const vec<Lit>& ps, bool learnt = false)
     {
         assert(sizeof(Lit)      == sizeof(uint32_t));
         assert(sizeof(float)    == sizeof(uint32_t));
         bool use_extra = learnt | extra_clause_field;
-
-        CRef cid = RegionAllocator<uint32_t>::alloc(clauseWord32Size(ps.size(), use_extra));
+        CRef cid       = ra.alloc(clauseWord32Size(ps.size(), use_extra));
         new (lea(cid)) Clause(ps, use_extra, learnt);
 
         return cid;
     }
 
+    CRef alloc(const Clause& from)
+    {
+        bool use_extra = from.learnt() | extra_clause_field;
+        CRef cid       = ra.alloc(clauseWord32Size(from.size(), use_extra));
+        new (lea(cid)) Clause(from, use_extra);
+        return cid; }
+
+    uint32_t size      () const      { return ra.size(); }
+    uint32_t wasted    () const      { return ra.wasted(); }
+
     // Deref, Load Effective Address (LEA), Inverse of LEA (AEL):
-    Clause&       operator[](Ref r)       { return (Clause&)RegionAllocator<uint32_t>::operator[](r); }
-    const Clause& operator[](Ref r) const { return (Clause&)RegionAllocator<uint32_t>::operator[](r); }
-    Clause*       lea       (Ref r)       { return (Clause*)RegionAllocator<uint32_t>::lea(r); }
-    const Clause* lea       (Ref r) const { return (Clause*)RegionAllocator<uint32_t>::lea(r); }
-    Ref           ael       (const Clause* t){ return RegionAllocator<uint32_t>::ael((uint32_t*)t); }
+    Clause&       operator[](CRef r)         { return (Clause&)ra[r]; }
+    const Clause& operator[](CRef r) const   { return (Clause&)ra[r]; }
+    Clause*       lea       (CRef r)         { return (Clause*)ra.lea(r); }
+    const Clause* lea       (CRef r) const   { return (Clause*)ra.lea(r);; }
+    CRef          ael       (const Clause* t){ return ra.ael((uint32_t*)t); }
 
     void free(CRef cid)
     {
         Clause& c = operator[](cid);
-        RegionAllocator<uint32_t>::free(clauseWord32Size(c.size(), c.has_extra()));
+        ra.free(clauseWord32Size(c.size(), c.has_extra()));
     }
 
     void reloc(CRef& cr, ClauseAllocator& to)
@@ -233,42 +282,68 @@ class ClauseAllocator : public RegionAllocator<uint32_t>
         
         if (c.reloced()) { cr = c.relocation(); return; }
         
-        cr = to.alloc(c, c.learnt());
+        cr = to.alloc(c);
         c.relocate(cr);
-        
-        // Copy extra data-fields: 
-        // (This could be cleaned-up. Generalize Clause-constructor to be applicable here instead?)
-        to[cr].mark(c.mark());
-        if (to[cr].learnt())         to[cr].activity() = c.activity();
-        else if (to[cr].has_extra()) to[cr].calcAbstraction();
     }
+};
+
+//=================================================================================================
+// Simple iterator classes (for iterating over clauses and top-level assignments):
+
+class ClauseIterator {
+    const ClauseAllocator& ca;
+    const CRef*            crefs;
+public:
+    ClauseIterator(const ClauseAllocator& _ca, const CRef* _crefs) : ca(_ca), crefs(_crefs){}
+
+    void operator++(){ crefs++; }
+    const Clause& operator*() const { return ca[*crefs]; }
+
+    // NOTE: does not compare that references use the same clause-allocator:
+    bool operator==(const ClauseIterator& ci) const { return crefs == ci.crefs; }
+    bool operator!=(const ClauseIterator& ci) const { return crefs != ci.crefs; }
+};
+
+
+class TrailIterator {
+    const Lit* lits;
+public:
+    TrailIterator(const Lit* _lits) : lits(_lits){}
+
+    void operator++()   { lits++; }
+    Lit  operator*() const { return *lits; }
+
+    bool operator==(const TrailIterator& ti) const { return lits == ti.lits; }
+    bool operator!=(const TrailIterator& ti) const { return lits != ti.lits; }
 };
 
 
 //=================================================================================================
 // OccLists -- a class for maintaining occurence lists with lazy deletion:
 
-template<class Idx, class Vec, class Deleted>
+template<class K, class Vec, class Deleted, class MkIndex = MkIndexDefault<K> >
 class OccLists
 {
-    vec<Vec>  occs;
-    vec<char> dirty;
-    vec<Idx>  dirties;
-    Deleted   deleted;
+    IntMap<K, Vec,  MkIndex> occs;
+    IntMap<K, char, MkIndex> dirty;
+    vec<K>                   dirties;
+    Deleted                  deleted;
 
  public:
-    OccLists(const Deleted& d) : deleted(d) {}
+    OccLists(const Deleted& d, MkIndex _index = MkIndex()) :
+        occs(_index), 
+        dirty(_index), 
+        deleted(d){}
     
-    void  init      (const Idx& idx){ occs.growTo(toInt(idx)+1); dirty.growTo(toInt(idx)+1, 0); }
-    // Vec&  operator[](const Idx& idx){ return occs[toInt(idx)]; }
-    Vec&  operator[](const Idx& idx){ return occs[toInt(idx)]; }
-    Vec&  lookup    (const Idx& idx){ if (dirty[toInt(idx)]) clean(idx); return occs[toInt(idx)]; }
+    void  init      (const K& idx){ occs.reserve(idx); occs[idx].clear(); dirty.reserve(idx, 0); }
+    Vec&  operator[](const K& idx){ return occs[idx]; }
+    Vec&  lookup    (const K& idx){ if (dirty[idx]) clean(idx); return occs[idx]; }
 
     void  cleanAll  ();
-    void  clean     (const Idx& idx);
-    void  smudge    (const Idx& idx){
-        if (dirty[toInt(idx)] == 0){
-            dirty[toInt(idx)] = 1;
+    void  clean     (const K& idx);
+    void  smudge    (const K& idx){
+        if (dirty[idx] == 0){
+            dirty[idx] = 1;
             dirties.push(idx);
         }
     }
@@ -281,28 +356,70 @@ class OccLists
 };
 
 
-template<class Idx, class Vec, class Deleted>
-void OccLists<Idx,Vec,Deleted>::cleanAll()
+template<class K, class Vec, class Deleted, class MkIndex>
+void OccLists<K,Vec,Deleted,MkIndex>::cleanAll()
 {
     for (int i = 0; i < dirties.size(); i++)
         // Dirties may contain duplicates so check here if a variable is already cleaned:
-        if (dirty[toInt(dirties[i])])
+        if (dirty[dirties[i]])
             clean(dirties[i]);
     dirties.clear();
 }
 
 
-template<class Idx, class Vec, class Deleted>
-void OccLists<Idx,Vec,Deleted>::clean(const Idx& idx)
+template<class K, class Vec, class Deleted, class MkIndex>
+void OccLists<K,Vec,Deleted,MkIndex>::clean(const K& idx)
 {
-    Vec& vec = occs[toInt(idx)];
+    Vec& vec = occs[idx];
     int  i, j;
     for (i = j = 0; i < vec.size(); i++)
         if (!deleted(vec[i]))
             vec[j++] = vec[i];
     vec.shrink(i - j);
-    dirty[toInt(idx)] = 0;
+    dirty[idx] = 0;
 }
+
+
+//=================================================================================================
+// CMap -- a class for mapping clauses to values:
+
+
+template<class T>
+class CMap
+{
+    struct CRefHash {
+        uint32_t operator()(CRef cr) const { return (uint32_t)cr; } };
+
+    typedef Map<CRef, T, CRefHash> HashTable;
+    HashTable map;
+        
+ public:
+    // Size-operations:
+    void     clear       ()                           { map.clear(); }
+    int      size        ()                const      { return map.elems(); }
+
+    
+    // Insert/Remove/Test mapping:
+    void     insert      (CRef cr, const T& t){ map.insert(cr, t); }
+    void     growTo      (CRef cr, const T& t){ map.insert(cr, t); } // NOTE: for compatibility
+    void     remove      (CRef cr)            { map.remove(cr); }
+    bool     has         (CRef cr, T& t)      { return map.peek(cr, t); }
+
+    // Vector interface (the clause 'c' must already exist):
+    const T& operator [] (CRef cr) const      { return map[cr]; }
+    T&       operator [] (CRef cr)            { return map[cr]; }
+
+    // Iteration (not transparent at all at the moment):
+    int  bucket_count() const { return map.bucket_count(); }
+    const vec<typename HashTable::Pair>& bucket(int i) const { return map.bucket(i); }
+
+    // Move contents to other map:
+    void moveTo(CMap& other){ map.moveTo(other.map); }
+
+    // TMP debug:
+    void debug(){
+        printf(" --- size = %d, bucket_count = %d\n", size(), map.bucket_count()); }
+};
 
 
 /*_________________________________________________________________________________________________

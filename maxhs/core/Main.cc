@@ -27,14 +27,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "minisat/utils/System.h"
 #include "minisat/utils/Options.h"
 #include <iostream> 
+#include "maxhs/ifaces/miniSatSolver.h"
+#include "maxhs/core/MaxSolver.h"
 
-#ifndef MaxSolver_h
-#include "maxhs/MaxSolver.h"
-#endif
+using namespace MaxHS;
 
-using namespace Minisat;
-
-static MaxSolver* thesolver = NULL;
+static MaxSolver* thesolver = nullptr;
 
 // Note that '_exit()' rather than 'exit()' has to be used. The reason is that 'exit()' calls
 // destructors and may cause deadlocks if a malloc/free function happens to be running (these
@@ -67,7 +65,7 @@ int main(int argc, char** argv) {
 	BoolOption   version("MAIN", "version", "Print version number and exit", false);
 
         parseOptions(argc, argv, true);
-	printf("c MaxHs-v%d.%d\n", 1, 0);
+	printf("c MaxHs-v%d.%d\n", 1, 5);
 
 	if(version) {
 	  return(1);
@@ -79,7 +77,7 @@ int main(int argc, char** argv) {
         signal(SIGTERM, SIGINT_exit);
         signal(SIGABRT, SIGINT_exit);
 
-        MaxSolver S;
+        MaxSolver S(new MaxHS_Iface::miniSolver);
         thesolver = &S;
 
         if (cpu_lim != INT32_MAX){
@@ -88,7 +86,7 @@ int main(int argc, char** argv) {
             if (rl.rlim_max == RLIM_INFINITY || (rlim_t)cpu_lim < rl.rlim_max){
                 rl.rlim_cur = cpu_lim;
                 if (setrlimit(RLIMIT_CPU, &rl) == -1)
-                    thesolver->printComment("c WARNING! Could not set resource limit: CPU-time.");
+		  thesolver->printComment("c WARNING! Could not set resource limit: CPU-time.");
             } }
 
         if (mem_lim != INT32_MAX){
@@ -98,12 +96,12 @@ int main(int argc, char** argv) {
             if (rl.rlim_max == RLIM_INFINITY || new_mem_lim < rl.rlim_max){
                 rl.rlim_cur = new_mem_lim;
                 if (setrlimit(RLIMIT_AS, &rl) == -1)
-                    thesolver->printComment("c WARNING! Could not set resource limit: Virtual memory.");
+		  thesolver->printComment("c WARNING! Could not set resource limit: Virtual memory.");
             } }
 
 
 #if defined(__linux__)
-        thesolver->printComment("c WARNING: for repeatability, setting FPU to use double precision.");
+        //thesolver->printComment("c WARNING: for repeatability, setting FPU to use double precision.");
 #endif	  
         thesolver->solve_maxsat(argv[1]);
         thesolver->printStatsAndExit(-1, 0);

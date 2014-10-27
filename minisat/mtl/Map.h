@@ -20,40 +20,10 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #ifndef Minisat_Map_h
 #define Minisat_Map_h
 
-// JD
-#include <vector>
-#include <sstream>
-#include <string>
-#include <locale>
-#include <string.h>
-#include <stdio.h>
-
 #include "minisat/mtl/IntTypes.h"
 #include "minisat/mtl/Vec.h"
 
 namespace Minisat {
-
-// JD This is Fahiem's hashing stuff
-const int anFibonacci[16]=				/* table of 24-bit fibonacci coefficients */
-{
-	0x00834271L,						/* 0 */
-	0x00915E23L,						/* 1 */
-	0x00D85447L,						/* 2 */
-	0x00F71B95L,						/* 3 */
-	0x00A19325L,						/* 4 */
-	0x00A04C01L,						/* 5 */
-	0x00E78139L,						/* 6 */
-	0x00810A49L,						/* 7 */
-	0x00BB1F71L,						/* 8 */
-	0x00FE19E3L,						/* 9 */
-	0x00C0AB43L,						/* 10 */
-	0x0091A8EBL,						/* 11 */
-	0x00C23AE9L,						/* 12 */
-	0x00BA33E5L,						/* 13 */
-	0x00ED3259L,						/* 14 */
-	0x00DD103DL							/* 15 */
-};
-
 
 //=================================================================================================
 // Default hash/equals functions
@@ -70,49 +40,6 @@ static inline uint32_t hash(uint64_t x){ return (uint32_t)x; }
 static inline uint32_t hash(int32_t x) { return (uint32_t)x; }
 static inline uint32_t hash(int64_t x) { return (uint32_t)x; }
 
-// JD
-struct vechash {  unsigned int operator()(const std::vector<int> &s) const { 
-    
-#if 1
-    // Fahiem's
-    char buf[1000];
-    buf[0] = '\0';
-    for(unsigned int i = 0; i < s.size(); i++)
-        sprintf(buf + strlen(buf), "%d ", s[i]);
- 
-    unsigned int nValue=0;
-    for(unsigned char *ps =( unsigned char *) buf; *ps; ps++ )
-		nValue+=anFibonacci[(nValue>>12)&0x0000000F]**ps;
-    return nValue;
-#else
-    std::string str_id;
-    for (std::vector<int>::iterator i = s.begin(); i != s.end(); i++) {
-        std::stringstream out;
-        out << *i;
-        str_id.append(out.str());
-        str_id.append(" ");
-    }
-    std::locale loc;                 // the "C" locale
-
-    const std::collate<char>& coll = std::use_facet<std::collate<char> >(loc);
-
-    return coll.hash(str_id.data(),str_id.data()+str_id.length());
-#endif
-} };
-
-// Vectors assumed sorted
-struct vecequal { bool operator()(const std::vector<int> &s1, const std::vector<int> &s2) const {
-    if (s1.size() != s2.size() ) {
-        return false;
-    }
-    for (unsigned int i = 0; i < s1.size(); i++) {
-        if (s1[i] != s2[i]) {
-             return false;
-        }
-    }
-    
-    return true;
-} };
 
 //=================================================================================================
 // Some primes
@@ -139,8 +66,8 @@ class Map {
     int        size;
 
     // Don't allow copying (error prone):
-    Map<K,D,H,E>&  operator = (Map<K,D,H,E>& other) { assert(0); }
-                   Map        (Map<K,D,H,E>& other) { assert(0); }
+    Map<K,D,H,E>&  operator = (Map<K,D,H,E>& other);
+                   Map        (Map<K,D,H,E>& other);
 
     bool    checkCap(int new_size) const { return new_size > cap; }
 
@@ -182,7 +109,7 @@ class Map {
         assert(size != 0);
         const D*         res = NULL;
         const vec<Pair>& ps  = table[index(k)];
-        for (unsigned int i = 0; i < ps.size(); i++)
+        for (int i = 0; i < ps.size(); i++)
             if (equals(ps[i].key, k))
                 res = &ps[i].data;
         assert(res != NULL);
@@ -195,7 +122,7 @@ class Map {
         assert(size != 0);
         D*         res = NULL;
         vec<Pair>& ps  = table[index(k)];
-        for (unsigned int i = 0; i < ps.size(); i++)
+        for (int i = 0; i < ps.size(); i++)
             if (equals(ps[i].key, k))
                 res = &ps[i].data;
         assert(res != NULL);
@@ -213,11 +140,11 @@ class Map {
                 return true; } 
         return false;
     }
-    
+
     bool has   (const K& k) const {
         if (size == 0) return false;
         const vec<Pair>& ps = table[index(k)];
-        for (unsigned int i = 0; i < ps.size(); i++)
+        for (int i = 0; i < ps.size(); i++)
             if (equals(ps[i].key, k))
                 return true;
         return false;
@@ -227,7 +154,7 @@ class Map {
     void remove(const K& k) {
         assert(table != NULL);
         vec<Pair>& ps = table[index(k)];
-        unsigned int j = 0;
+        int j = 0;
         for (; j < ps.size() && !equals(ps[j].key, k); j++);
         assert(j < ps.size());
         ps[j] = ps.last();

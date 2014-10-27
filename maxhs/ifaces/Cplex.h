@@ -25,10 +25,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef CPLEX_H
 #define CPLEX_H
 
-#ifndef Minisat_SolverTypes_h
+#include "maxhs/core/MaxSolverTypes.h"
 #include "minisat/core/SolverTypes.h"
-#endif
-
 #include <map>
 #include <ilcplex/ilocplex.h> 
 #include <iostream>
@@ -43,6 +41,8 @@ ILOSTLBEGIN
 
 using namespace Minisat;
 using namespace std;
+
+namespace MaxHS {
 
 class Cplex {
 private:
@@ -78,9 +78,9 @@ public:
     Cplex();
     ~Cplex();
 
-    void initCplex(vector<int> &satvars, vector<Weight> &costs);
-    bool add_clausal_constraint(vec<Lit> &con); 
-    void add_impl_constraint(Lit blit, vec<Lit> &con); 
+    void initCplex(const vector<int> &satvars, const vector<Weight> &costs);
+    bool add_clausal_constraint(vector<Lit> &con); 
+    void add_impl_constraint(Lit blit, vector<Lit> &con); 
     Weight solve(vector<vector<Lit> > &solution); 
     bool approx(vector<Lit> &solution);
     void printInfeasibility();
@@ -90,6 +90,8 @@ private:
     bool getSolutionAtIndex(vector<Lit> &solution, int solnIndex); 
 };
 inline int Cplex::getMaxNSolns() const { return cplex_nsoln; }
+
+} //namespace MaxHS
 #endif
 
 

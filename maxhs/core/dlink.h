@@ -31,21 +31,17 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <vector>
 #include <stdint.h>
 #include <stdio.h>
-
-#ifndef Minisat_SolverTypes_h
+#include "maxhs/core/MaxSolverTypes.h"
 #include "minisat/core/SolverTypes.h"
-#endif
-
-#ifndef Minisat_Solver_h
 #include "minisat/core/Solver.h"
-#endif
- 
 #include "minisat/mtl/Heap.h"
 
 //#define DLINK_DEBUG 1
 
 using namespace Minisat;
 using namespace std;
+
+namespace MaxHS {
 
 class dlink_node {
 private:
@@ -95,7 +91,7 @@ private:
         }
         BestColLt(vector<Weight> &weights, const dlink_matrix *matrix) : w(weights), m(matrix) { }
     };
-    Heap<BestColLt> bestcol_heap;
+  Heap<int,BestColLt> bestcol_heap;
 
     // map column ID to the column header node 
     vector<dlink_node *> id_to_col;
@@ -156,5 +152,6 @@ inline bool dlink_matrix::col_in_matrix(int id) const {
     if (((unsigned int) id) >= id_to_col.size() || id_to_col[id] == NULL) return false;
     return id_to_col[id]->r->l == id_to_col[id];
 }
- 
+
+} //namespace MaxHS 
 #endif

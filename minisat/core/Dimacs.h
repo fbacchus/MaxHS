@@ -26,100 +26,62 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "minisat/utils/ParseUtils.h"
 #include "minisat/core/SolverTypes.h"
 
-#ifndef MaxSolver_h
-#include "maxhs/MaxSolver.h"
-#endif
-
 namespace Minisat {
 
 //=================================================================================================
 // DIMACS Parser:
 
-template<class B>
-static void readClause(B& in, vec<Lit>& lits) {
+template<class B, class Solver>
+static void readClause(B& in, Solver& S, vec<Lit>& lits) {
     int     parsed_lit, var;
     lits.clear();
     for (;;){
         parsed_lit = parseInt(in);
         if (parsed_lit == 0) break;
         var = abs(parsed_lit)-1;
+        while (var >= S.nVars()) S.newVar();
         lits.push( (parsed_lit > 0) ? mkLit(var) : ~mkLit(var) );
     }
 }
 
-// JD Read clauses with weights
-template<class B>
-static void readClause(B& in, vec<Lit>& lits, Weight *outW) {
-    bool first_time = true;
-    int     parsed_lit, var;
-    lits.clear();
-    for (;;){
-        if (first_time) {
-            first_time = false;
-            *outW = (Weight) parseIntegerDouble(in);
-            continue;
-        }
-        parsed_lit = parseInt(in);
-        if (parsed_lit == 0) break;
-        var = abs(parsed_lit)-1;
-        lits.push( (parsed_lit > 0) ? mkLit(var) : ~mkLit(var) );
-    }
-}
-
-template<class B>
-static bool parse_DIMACS_main(B& in, MaxSolver *S) {
+template<class B, class Solver>
+static void parse_DIMACS_main(B& in, Solver& S, bool strictp = false) {
     vec<Lit> lits;
+    int vars    = 0;
     int clauses = 0;
-    // JD Note that partial maxsat clauses either have weight 1 or partial_Top  
-    bool clausesHaveWeights = false;
- 
+    int cnt     = 0;
     for (;;){
         skipWhitespace(in);
         if (*in == EOF) break;
         else if (*in == 'p'){
-            // JD it could be unweighted or weighted CNF
             if (eagerMatch(in, "p cnf")){
-                int nvars = parseInt(in);
-                S->setNumOrigVars(nvars);
+                vars    = parseInt(in);
                 clauses = parseInt(in);
-                S->printOutput("c Dimacs Vars", nvars);
-                S->printOutput("c Dimacs Clauses", clauses);
-            // JD
-            }else if (eagerMatch(in, "wcnf")) {
-                clausesHaveWeights = true;
-                int nvars = parseInt(in);
-                S->setNumOrigVars(nvars);
-                clauses = parseInt(in);
-                S->printOutput("c Dimacs Vars", nvars);
-                S->printOutput("c Dimacs Clauses", clauses);
-                if (! eagerMatch(in, "\n")) {
-                    Weight top = parseIntegerDouble(in);
-		    S->setHardWeight(top);
-                    S->printOutput("c Dimacs Top", top);
-		}
+                // SATRACE'06 hack
+                // if (clauses > 4000000)
+                //     S.eliminate(true);
             }else{
-                S->printErrorAndExit("c PARSE ERROR! Unexpected char");
+                printf("PARSE ERROR! Unexpected char: %c\n", *in), exit(3);
             }
         } else if (*in == 'c' || *in == 'p')
             skipLine(in);
         else{
-            // JD parse the weights of clauses as well (default weight 1) 
-            Weight w = 1;   
-            clausesHaveWeights ? readClause(in, lits, &w) : readClause(in, lits);
-            if (S->addClause(lits, w)) {
-                return true;
-            }
-        }
+            cnt++;
+            readClause(in, S, lits);
+            S.addClause_(lits); }
     }
-    return false;
+    if (strictp && cnt != clauses)
+        printf("PARSE ERROR! DIMACS header mismatch: wrong number of clauses\n");
 }
 
 // Inserts problem into solver.
 //
-static bool parse_DIMACS(gzFile input_stream, MaxSolver *S) {
+template<class Solver>
+static void parse_DIMACS(gzFile input_stream, Solver& S, bool strictp = false) {
     StreamBuffer in(input_stream);
-    return parse_DIMACS_main(in, S); }
+    parse_DIMACS_main(in, S, strictp); }
 
+//=================================================================================================
 }
 
 #endif

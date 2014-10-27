@@ -7,4 +7,4 @@ CPLEXLIBDIR?=/pkgs/ilog/cplex125/cplex/lib/x86-64_sles10_4.1/static_pic
 CONCERTLIBDIR?=/pkgs/ilog/cplex125/concert/lib/x86-64_sles10_4.1/static_pic
 CONCERTINCDIR?=/pkgs/ilog/cplex125/concert/include
 CPLEXINCDIR?=/pkgs/ilog/cplex125/cplex/include
-prefix?=/u/fbacchus/MaxSatLib/MaxHS
+prefix?=/u/fbacchus/MaxSat/MaxHS
