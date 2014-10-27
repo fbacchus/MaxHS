@@ -23,15 +23,20 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 #include <stdio.h>
 #include <math.h>
+#include <iostream>
 
 #include "maxhs/core/MaxSolverTypes.h"
 #include "minisat/utils/ParseUtils.h"
 #include "minisat/core/SolverTypes.h"
 #include "maxhs/core/MaxSolver.h"
+#include "maxhs/core/Wcnf.h"
+
+using std::cout;
+using std::cerr;
 
 using namespace Minisat;
+using namespace MaxHS;
 
-namespace MaxHS {
 
 template<class B>
 static double parseIntegerDouble(B& in) {
@@ -40,7 +45,8 @@ static double parseIntegerDouble(B& in) {
     skipWhitespace(in);
     if      (*in == '-') neg = true, ++in;
     else if (*in == '+') ++in;
-    if (*in < '0' || *in > '9') fprintf(stdout, "c PARSE ERROR! Unexpected char: %c\n", *in), exit(3);
+    if (*in < '0' || *in > '9')
+      cerr << "PARSE ERROR! Unexpected char: " << *in << "\n" ,  exit(3);
     while (*in >= '0' && *in <= '9')
         val = val*10 + (*in - '0'),
         ++in;
@@ -57,7 +63,7 @@ static double parseDouble(B& in) {
     skipWhitespace(in);
     if      (*in == '-') neg = true, ++in;
     else if (*in == '+') ++in;
-    if ((*in < '0' || *in > '9') && *in != '.' && *in != 'e' && *in != '-' && *in != '+') fprintf(stdout, "c PARSE ERROR 3! Unexpected char: %c\n", *in), exit(3);
+    if ((*in < '0' || *in > '9') && *in != '.' && *in != 'e' && *in != '-' && *in != '+') fprintf(stderr, "PARSE ERROR 3! Unexpected char: %c\n", *in), exit(3);
     while ((*in >= '0' && *in <= '9') || *in == '.' || *in == 'e' || *in == '-' || *in == '+') {
 	if (*in == '.') frac = true;
         else if (*in == 'e') {
@@ -79,88 +85,89 @@ static double parseDouble(B& in) {
 //=================================================================================================
 // DIMACS Parser:
 
-  template<class B>
-  static void readClause(B& in, vector<Lit>& lits) {
-    int     parsed_lit, var;
-    lits.clear();
-    for (;;){
-      parsed_lit = parseInt(in);
-      if (parsed_lit == 0) break;
-      var = abs(parsed_lit)-1;
-      lits.push_back( (parsed_lit > 0) ? mkLit(var) : ~mkLit(var) );
-    }
+template<class B>
+static void readClause(B& in, vector<Lit>& lits) {
+  int     parsed_lit, var;
+  lits.clear();
+  for (;;){
+    parsed_lit = parseInt(in);
+    if (parsed_lit == 0) break;
+    var = abs(parsed_lit)-1;
+    lits.push_back( (parsed_lit > 0) ? mkLit(var) : ~mkLit(var) );
   }
+}
 
 // JD Read clauses with weights
-  template<class B>
-  static void readClause(B& in, vector<Lit>& lits, Weight *outW) {
-    bool first_time = true;
-    int     parsed_lit, var;
-    lits.clear();
-    for (;;){
-      if (first_time) {
-	first_time = false;
-	*outW = (Weight) parseIntegerDouble(in);
-	continue;
-      }
-      parsed_lit = parseInt(in);
-      if (parsed_lit == 0) break;
-      var = abs(parsed_lit)-1;
-      lits.push_back( (parsed_lit > 0) ? mkLit(var) : ~mkLit(var) );
+template<class B>
+static void readClause(B& in, vector<Lit>& lits, Weight &outW) {
+  bool first_time = true;
+  int     parsed_lit, var;
+  lits.clear();
+  for (;;){
+    if (first_time) {
+      first_time = false;
+      outW = (Weight) parseDouble(in);
+      continue;
     }
+    parsed_lit = parseInt(in);
+    if (parsed_lit == 0) break;
+    var = abs(parsed_lit)-1;
+    lits.push_back( (parsed_lit > 0) ? mkLit(var) : ~mkLit(var) );
   }
+}
 
-  template<class B>
-  static void parse_DIMACS_main(B& in, MaxSolver *S) {
-    vector<Lit> lits;
-    int clauses = 0;
-    // JD Note that partial maxsat clauses either have weight 1 or partial_Top  
-    bool clausesHaveWeights = false;
- 
-    for (;;){
-      skipWhitespace(in);
-      if (*in == EOF) break;
-      else if (*in == 'p'){
-	// JD it could be unweighted or weighted CNF
-	if (eagerMatch(in, "p cnf")){
-	  int nvars = parseInt(in);
-	  S->setNumOrigVars(nvars);
-	  clauses = parseInt(in);
-	  //S->printOutput("c Dimacs Vars", nvars);
-	  //S->printOutput("c Dimacs Clauses", clauses);
-	  // JD
-	}else if (eagerMatch(in, "wcnf")) {
-	  clausesHaveWeights = true;
-	  int nvars = parseInt(in);
-	  S->setNumOrigVars(nvars);
-	  clauses = parseInt(in);
-	  //S->printOutput("c Dimacs Vars", nvars);
-	  //S->printOutput("c Dimacs Clauses", clauses);
-	  if (! eagerMatch(in, "\n")) {
-	    Weight top = parseIntegerDouble(in);
-	    S->setHardWeight(top);
-	    //S->printOutput("c Dimacs Top", top);
-	  }
-	}else{
-	  S->printErrorAndExit("c PARSE ERROR! Unexpected char");
+/********************************************************/
+
+template<class B>
+static bool parse_DIMACS_main(B& in, Wcnf *F) {
+  vector<Lit> lits;
+  int clauses = 0;
+  // JD Note that partial maxsat clauses either have weight 1 or partial_Top  
+  bool clausesHaveWeights = false;
+  
+  for (;;){
+    skipWhitespace(in);
+    if (*in == EOF) break;
+    else if (*in == 'p'){
+      // JD it could be unweighted or weighted CNF
+      if (eagerMatch(in, "p cnf")){
+	int nvars = parseInt(in);
+	clauses = parseInt(in);
+	F->set_dimacs_params(nvars, clauses);
+	// JD
+      }else if (eagerMatch(in, "wcnf")) {
+	clausesHaveWeights = true;
+	int nvars = parseInt(in);
+	clauses = parseInt(in);
+	if (! eagerMatch(in, "\n")) {
+	  Weight top = parseIntegerDouble(in);
+	  F->set_dimacs_params(nvars, clauses, top);
 	}
-      } else if (*in == 'c' || *in == 'p')
-	skipLine(in);
-      else{
-	// JD parse the weights of clauses as well (default weight 1) 
-	Weight w = 1;   
-	clausesHaveWeights ? readClause(in, lits, &w) : readClause(in, lits);
-	S->addClause(lits, w);
+	else
+	  //no top => no hard clauses => no upper bound on soft clause weight.
+	  F->set_dimacs_params(nvars, clauses);
+      }else{
+	//not 'p cnf' or 'p wcnf'
+	return false;
       }
+    } else if (*in == 'c' || *in == 'p')
+      skipLine(in);
+    else{
+      // JD parse the weights of clauses as well (default weight 1) 
+      Weight w = 1;   
+      clausesHaveWeights ? readClause(in, lits, w) : readClause(in, lits);
+      F->addDimacsClause(lits, w); 
     }
   }
+  return true;
+}
 
 // Inserts problem into solver.
 //
-  static void parse_DIMACS(gzFile input_stream, MaxSolver *S) {
-    StreamBuffer in(input_stream);
-    parse_DIMACS_main(in, S); }
-
-}  //Namespace MaxHS
+static bool parse_DIMACS(gzFile input_stream, Wcnf *F) 
+{
+  StreamBuffer in(input_stream);
+  return parse_DIMACS_main(in, F); 
+}
 
 #endif

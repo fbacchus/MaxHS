@@ -1,4 +1,4 @@
-/***********[MaxSolverTypes.h]
+/***********[Params.h]
 Copyright (c) 2012-2013 Jessica Davies, Fahiem Bacchus
 
 Permission is hereby granted, free of charge, to any person obtaining a
@@ -21,14 +21,59 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
+#ifndef PARAMS_h
+#define PARAMS_h
+#include <string>
+#include "maxhs/core/MaxSolverTypes.h"
 
-#ifndef MaxSolverTypes_h
-#define MaxSolverTypes_h
 
-typedef double Weight;
+class Params {
+  //MaxSolver helper class to manage its settable parameters. 
+  //see MaxSlvParams.cc for description
+public:
+  Params();
+  ~Params() {}
+  void readOptions();
+  int verbosity;
+  int mverbosity;
+  const double noTimeLimit;
+  int min_type;
+  double mus_cpu_lim;
+  double mus_lits_per_sec;
+  bool dsjnt_phase;
+  double dsjnt_cpu_per_core;
+  double dsjnt_mus_cpu_lim;
+  double optcores_cpu_per;
+  bool fbeq;
+  bool fb;
+  bool printBstSoln;
+  bool printSoln;
 
-enum class CoreType { cores, nonCores, mixed };
-enum class CoreRelaxFn { rand, maxoccur, frac };
-enum class SeedType { none, cores, mixed };
+  CoreType coreType;
+  CoreRelaxFn coreRelaxFn;
+
+  SeedType seedType;
+  int seed_max;
+  bool bvarDecisions;
+  double frac_to_relax;
+  int frac_rampup_start;
+  int frac_rampup_end;
+  int max_before_cplex;
+  
+  bool nonopt_rand;
+  bool nonopt_maxoccur;
+  bool nonopt_frac;
+
+  bool greedy_cores_only;
+
+  int mip_threads;
+  bool mip_data_chk;
+  bool mip_write_model;
+  bool mip_output;
+
+  std::string instance_file_name;
+};
+
+extern Params params;
 
 #endif

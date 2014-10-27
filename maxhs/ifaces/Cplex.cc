@@ -22,251 +22,314 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
 
-#include "maxhs/ifaces/Cplex.h"
-#include "minisat/utils/Options.h"
-#include "minisat/utils/System.h"
-
 #include <iostream>
-#include <stdexcept>
+#include <algorithm>
+#include <string>
+#include <cstring>
+#include "maxhs/ifaces/Cplex.h"
+#include "maxhs/utils/io.h"
+#include "minisat/utils/System.h"
+#include "maxhs/utils/Params.h"
 
-using namespace MaxHS;
 
-static const char* category_mwhs_cplex = "Cplex";
+//#include <stdexcept>
 
-static IntOption     opt_nsoln              (category_mwhs_cplex, "nsoln", "Ask CPLEX for this number of solutions.", 1, IntRange(1, INT32_MAX));
-static IntOption     opt_poolintensity      (category_mwhs_cplex, "intensity", "CPLEX SolnPoolIntensity parameter.", 2, IntRange(0, 4));
-// These defaults were chosen to collect the 10 most diverse solutions, from a maximum of 100 generated.
-static IntOption     opt_poolreplace        (category_mwhs_cplex, "replace", "CPLEX SolnPoolReplace parameter.", 2, IntRange(0, 2));
-static IntOption     opt_poolcapacity       (category_mwhs_cplex, "capacity", "CPLEX SolnPoolCapacity parameter.", 10, IntRange(0, INT32_MAX));
-static IntOption     opt_populatelim        (category_mwhs_cplex, "poplim", "CPLEX PopulateLim parameter.", 100, IntRange(0, INT32_MAX));
-static BoolOption    opt_threads_off        (category_mwhs_cplex, "threads-off", "Set the CPLEX Threads parameter to 1.", true); 
+using namespace MaxHS_Iface;
+using std::cout;
+using std::endl;
+using std::min;
 
-Cplex::Cplex() :
-    n_variables(0)
-    , cplex_nsoln        (opt_nsoln)
-    , cplex_poolintensity(opt_poolintensity)
-    , cplex_poolreplace  (opt_poolreplace)
-    , cplex_poolcapacity (opt_poolcapacity)
-    , cplex_populatelim  (opt_populatelim)
-    , cplex_threads_off  (opt_threads_off)
-    , numSolves          (0)
-    , totalTime          (0) 
-    , numNonCoreConstraints (0)
-    , maxNonCoreLength(-1)
-    , minNonCoreLength(-1)
-    , totalNonCoreLength(0)
-    , totalNumOptSolutions (0)
+Cplex::Cplex(Bvars b) :
+  bvars {b},
+  env {nullptr},
+  mip {nullptr},
+  solver_valid {true},
+  numSolves {0},
+  totalTime {0},
+  stime {0},
+  prevTotalTime {0},
+  numConstraints {0},
+  numNonCoreConstraints {0},
+  totalConstraintSize {0},
+  totalNonCoreSize {0},
+  in2ex_map {},
+  ex2in_map{}
 {
-    //env.setNormalizer(false); 
+  int status;
+  env = CPXopenCPLEX(&status);
+  if(env == nullptr) 
+    processError(status, true, "Could not open CPLEX environment");
+
+  if(params.mip_output && 
+     (status = CPXsetintparam(env, CPX_PARAM_SCRIND, CPX_ON)))
+    cout << "c ERROR. Failure to turn on CPLEX screen indicator, error " << status << "\n";
+
+  /*  if(!params.mip_output) {
     env.setOut(env.getNullStream());
     env.setWarning(env.getNullStream());
     env.setError(env.getNullStream());
+    }*/
 
-   
-    model = IloModel(env);
-    bool_variables = IloBoolVarArray(env);
-    varcosts = IloNumArray(env);
-    constraints = IloRangeArray(env);
+  //model = IloModel(env);
+  //bool_variables = IloBoolVarArray(env);
+  //cplex_obj = IloMinimize(env);
+  //model.add(bool_variables);
+  //model.add(cplex_obj);
+  //cplex = IloCplex(model);
+
+  if(!(mip = CPXcreateprob(env, &status, "cplex_prob")))
+    processError(status, true, "Could not create CPLEX problem");
+  if(status = CPXchgprobtype(env, mip, CPXPROB_MILP))
+    processError(status, false, "Could not change CPLEX problem to MIP");
+  if(status = CPXsetdblparam(env, CPX_PARAM_EPAGAP, 0))
+    processError(status, false, "Could not set CPLEX absolute gap");
+  if(status = CPXsetdblparam(env, CPX_PARAM_EPGAP, 0.0))
+    processError(status, false, "Could not set CPLEX relative gap");
+  if(status = CPXsetintparam(env, CPX_PARAM_CLOCKTYPE, 1))
+    processError(status, false, "Could not set CPLEX CLOCKTYPE gap");
+  if(status = CPXsetintparam(env, CPX_PARAM_THREADS, params.mip_threads))
+    processError(status, false, "Could not set CPLEX global threads");
+  if(status = CPXsetintparam(env, CPX_PARAM_DATACHECK, params.mip_threads))
+    processError(status, false, "Could not set CPLEX Data Check");
+
+  /*cplex.setParam(IloCplex::EpAGap, 0);
+  cplex.setParam(IloCplex::EpGap, 0);
+  cplex.setParam(IloCplex::ClockType, 1);
+  cplex.setParam(IloCplex::Threads, params.mip_threads);
+  cplex.setParam(IloCplex::DataCheck, params.mip_data_chk);*/
+
+  /*IloNumArray wts(env);
+  for(int i = 0; i < bvars.n(); i++) {
+    ensure_mapping(bvars.varOfCls(i));
+    wts.add(bvars.wt(bvars.varOfCls(i)));
+    }
+    model.add(IloObjective(env, IloScalProd(wts, bool_variables)));
+    varsInObj = bool_variables.getSize();*/
 }
 
 Cplex::~Cplex(){
-    bool_variables.end();
-    constraints.end();
-    varcosts.end();
-    env.end();
+  /*    bool_variables.end();
+    cplex_obj.end();
+    model.end();
+    env.end();*/
+  int status;
+  if(mip &&
+     (status = CPXfreeprob(env, &mip)))
+     processError(status, false, "Could not free the cplex mip model");
+  if(env &&
+     (status = CPXcloseCPLEX(&env)))
+    processError(status, false, "Could not close the cplex environment");
 }
 
-// costs specifies the cost incurred if the satvar is truthified (set to 1)
-void Cplex::initCplex(const vector<int> &satvars, const vector<Weight> &costs){
-   
-    for (size_t i = 0; i < satvars.size(); i++) {
-        int satvar = satvars[i];
-        satvar_to_cplexvar[satvar] = n_variables++;
-        cplexvar_to_satvar.push_back(satvar);
-        bool_variables.add(IloBoolVar(env));
-        varcosts.add(costs[i]);
-    }
-      
-    model.add(bool_variables);
-    model.add(constraints);
-
-    model.add(IloObjective(env, IloScalProd(varcosts, bool_variables))); 
-
-    cplex = IloCplex(env);
-    cplex.extract(model);
-
-    cplex.setParam(IloCplex::EpAGap, 0);
-    cplex.setParam(IloCplex::EpGap, 0);
-    cplex.setParam(IloCplex::AdvInd, 1);
-
-    if (cplex_threads_off) {
-        cplex.setParam(IloCplex::Threads, 1);
-    }
-    if (cplex_nsoln > 1) {
-        cplex.setParam(IloCplex::SolnPoolCapacity, cplex_poolcapacity);
-        cplex.setParam(IloCplex::SolnPoolReplace, cplex_poolreplace);
-        cplex.setParam(IloCplex::SolnPoolIntensity, cplex_poolintensity);
-        cplex.setParam(IloCplex::PopulateLim, cplex_populatelim);
-        cplex.setParam(IloCplex::SolnPoolAGap, 0); // so only optimal solutions are accumulated
-    }
-
-    //if (timeout > 0) cplex.setParam(IloCplex::TiLim, timeout);
-    //if (!presolve) cplex.setParam(IloCplex::PreInd, CPX_OFF);
-    /*cplex.setParam(IloCplex::RootAlg, 0);
-    cplex.setParam(IloCplex::MIPEmphasis, 0);
-    cplex.setParam(IloCplex::HeurFreq, 0);
-    cplex.setParam(IloCplex::VarSel, 0); 
-    cplex.setParam(IloCplex::NodeSel, 1); 
-    cplex.setParam(IloCplex::AdvInd, 0);*/
-    /* 
-      cplex.setParam(IloCplex::AggInd, 0);
-      cplex.setParam(IloCplex::Reduce, 0);
-      cplex.setParam(IloCplex::PrePass, 0);
-      cplex.setParam(IloCplex::DepInd, 0);
-    */
+void Cplex::processError(int status, bool terminal, const char *msg) {
+  char errmsg[CPXMESSAGEBUFSIZE];
+  auto errstr = CPXgeterrorstring(env, status, errmsg);
+  cout << "c ERROR. " << msg << "\n";
+  if(errstr)
+    cout << "c ERROR. " << errmsg << "\n";
+  else
+    cout << "c ERROR. error code = " << status << "\n";
+  if(terminal)
+    solver_valid = false;
 }
 
-bool Cplex::add_clausal_constraint(vector<Lit> &theCon){
-    IloExpr expr(env);
-    int numNeg = 0;
-    for(size_t i = 0; i < theCon.size(); i++) {
-        int cplexvarindex = satvar_to_cplexvar[var(theCon[i])];
-        IloBoolVar &boolvar = bool_variables[cplexvarindex];
-        if (sign(theCon[i])) {
-            expr -= boolvar;
-            numNeg++; 
-        } else {
-            expr += boolvar;
-        }
-    }
-
-    if (numNeg > 0) {
-        numNonCoreConstraints++;
-        totalNonCoreLength += theCon.size();
-        minNonCoreLength = (minNonCoreLength < 0 || (theCon.size() < minNonCoreLength)) ? theCon.size() : minNonCoreLength;
-        maxNonCoreLength = (maxNonCoreLength < 0 || (theCon.size() > maxNonCoreLength)) ? theCon.size() : maxNonCoreLength;
-    }
-    IloRange con(env, 1-numNeg, expr);
-    constraints.add(con);
-    model.add(con);
-
-    return (numNeg > 0);
-}
-void Cplex::add_impl_constraint(Lit blit, vector<Lit> &theCon){
-    IloExpr expr(env);
-    int k = -theCon.size();
-    IloBoolVar blitvar = bool_variables[satvar_to_cplexvar[var(blit)]];
-    if (sign(blit)) {
-        expr += k * (1 - blitvar);
-        //expr -= k * blitvar;
-    } else {
-        expr += k * blitvar;
-    }
-    for(size_t i = 0; i < theCon.size(); i++) {
-        int cplexvarindex = satvar_to_cplexvar[var(theCon[i])];
-        IloBoolVar &boolvar = bool_variables[cplexvarindex];
-        if (sign(theCon[i])) {
-            expr += (1 - boolvar);
-        } else {
-            expr += boolvar;
-        }
-    }
-
-    IloRange con(env, 0, expr);
-    constraints.add(con);
-    model.add(con);
+void Cplex::ensure_mapping(const Var ex) {
+//Create new cplex bool variable if one does not already exist 
+  if (ex >= (int) ex2in_map.size())
+    ex2in_map.resize(ex+1,var_Undef);
+  
+  if(ex2in_map[ex] == var_Undef) {
+    int newCplexVar = CPXgetnumcols(env, mip);
+    ex2in_map[ex] = newCplexVar;
+    if (newCplexVar >= (int) in2ex_map.size())
+      in2ex_map.resize(newCplexVar+1, var_Undef);
+    in2ex_map[newCplexVar] = ex;
+    addNewVar(ex);
+  }
 }
 
-bool Cplex::approx(vector<Lit> &solution) {
-
-    cplex.setParam(IloCplex::MIPEmphasis, CPX_MIPEMPHASIS_FEASIBILITY);
-    cplex.setParam(IloCplex::IntSolLim, 1);
-    double startTime = cpuTime(); 
-    solution.clear();
-    bool result = true;
-
-    if (cplex.solve()) {
-        IloCplex::CplexStatus status = cplex.getCplexStatus();
-        if (status != CPXMIP_SOL_LIM && status != CPX_STAT_OPTIMAL && status != CPXMIP_OPTIMAL_TOL) {
-            result = false;
-        } else if (!getSolutionAtIndex(solution, -1)) {
-            result = false;
-            solution.clear();
-        }
-    } else {
-        result = false;
-    }
-    totalTime += cpuTime() - startTime;
-    return result; 
+void Cplex::addNewVar(Var ex) {
+  //add bvar "ex" to Cplex as a new column with its weight being
+  //in the objective fn.
+  double clsWt {bvars.wt(ex)};
+  double lb {0};
+  double ub {1};
+  char type {'B'};
+  int status = CPXnewcols(env, mip, 1, &clsWt, &lb, &ub, &type, nullptr);
+  if(status) {
+    processError(status, false, "Could not create new CPLEX variable");
+    cout << "c ERROR. var = " << ex << " wt = " << clsWt << "\n";
+  }
 }
 
-Weight Cplex::solve(vector<vector<Lit> > &solutions) {   
-    IloNum objval = -1;
-    solutions.clear();
-    numSolves++;
-    double startTime = cpuTime();
-   
-    cplex.setParam(IloCplex::MIPEmphasis, CPX_MIPEMPHASIS_OPTIMALITY);
-    cplex.setParam(IloCplex::IntSolLim, 2100000000);
+bool Cplex::add_clausal_constraint(const vector<Lit>& theCon){
+  if(!solver_valid)
+    return false;
 
-    if (cplex.solve()) {
-        IloCplex::CplexStatus status = cplex.getCplexStatus();
-        // CPXMIP_OPTIMAL_TOP means that an optimal solution was found within the EpGap or EpAGap
-        if (status == CPX_STAT_OPTIMAL || status == CPXMIP_OPTIMAL_TOL) {
-            objval = cplex.getObjValue();
-	    //printf("Cplex solved objval = %0.lf\n", objval); fflush(stdout);
-            if (cplex_nsoln > 1) {
-                cplex.populate(); 
-            }
-            int num = cplex_nsoln > 1 ? cplex.getSolnPoolNsolns() : 1;
-            totalNumOptSolutions += min(cplex_nsoln, num);
-            if (num > 0) {
-                int maxSize = min(num, cplex_nsoln);
-                solutions.resize(maxSize);
-                for (int i = 0; (i < maxSize && objval >= 0); i++) {
-                    if (!getSolutionAtIndex(solutions[i], cplex_nsoln > 1 ? i : -1)) {
-		      //printf("failed to get a solution = %d\n", i); fflush(stdout);
-                        objval = -1;
-                        solutions.resize(i);
-                    }
-                }
-                if (cplex_nsoln > 1) { 
-                    cplex.delSolnPoolSolns(0, num-1);
-                } 
-            } else {
-                objval = -1;
-            }
-        } else {
-            objval = -1;
-            //printf("Unexpected status = %d\n", status); fflush(stdout);
-        }
+  bool nonCore {false};
+  numConstraints++;
+  totalConstraintSize += theCon.size();
+
+  vector<int> cplex_vars {};
+  vector<double> cplex_coeff {};
+  int numNeg {0};
+  char sense {'G'};
+  double rhs;
+  int beg {0};
+
+  for(auto lt: theCon) {
+    if(!bvars.isBvar(lt)) {
+      cout << "c ERROR: Cplex passed constraint with non-b-variable\n"
+	   << theCon << "\n";
+      return false;
     }
+    ensure_mapping(lt);
+    cplex_vars.push_back(ex2in(lt));
+    if(bvars.wt(lt) > 0)
+      cplex_coeff.push_back(1.0);
     else {
-      //printf("Cplex failed to solve status = %d\n", cplex.getCplexStatus()); fflush(stdout);
+      cplex_coeff.push_back(-1.0);
+      nonCore = true;
+      numNeg++;
     }
-    
-    totalTime += cpuTime() - startTime;
-    
-    return objval;
+  }
+  if(nonCore) {
+    numNonCoreConstraints++;
+    totalNonCoreSize += theCon.size();
+  }
+  rhs = 1.0 - numNeg;
+  int status = CPXaddrows(env, mip, 0, 1, cplex_vars.size(), &rhs, &sense,
+			  &beg, cplex_vars.data(), cplex_coeff.data(),
+			  nullptr, nullptr);
+  if(status) {
+    processError(status, false, "Could not create CPLEX clausal constraint");
+    cout << "c ERROR. clause = " << theCon << " cplex_vars = " << cplex_vars
+	 << " cplex_coefs = " << cplex_coeff << "rhs = " << rhs << "\n";
+  }
+  return (nonCore);
 }
 
-bool Cplex::getSolutionAtIndex(vector<Lit> &solution, int solnIndex) {
-    bool success = true;
-    for (int i = 0; i < bool_variables.getSize(); i++) {
-        IloNum val = cplex.getValue(bool_variables[i], solnIndex);
-        if ((double)val > 0.99) {
-            solution.push_back(mkLit(cplexvar_to_satvar[i], false));
-        }
-        else if ((double)val < 0.01) {
-            solution.push_back(mkLit(cplexvar_to_satvar[i], true));
-        } else {
-            success = false;
-        }
+/*void Cplex::add_impl_constraint(Lit blit, const vector<Lit>& theCon){
+    IloExpr expr(env);
+    numConstraints++;
+    totalConstraintSize += theCon.size() + 1;
+    int k = -theCon.size();
+    ensure_mapping(blit);
+    IloBoolVar& blitvar = bool_variables[ex2in(blit)];
+    if(bvars.wt(blit) > 0) 
+      expr += k * blitvar;
+    else 
+      expr += k * (1 - blitvar);
+    for(auto lt: theCon) {
+      ensure_mapping(lt);
+      IloBoolVar &boolvar = bool_variables[ex2in(lt)];
+        if(bvars.wt(lt) > 0)
+	  expr += boolvar;
+	else 
+	  expr += (1 - boolvar);
     }
-    return success;
+    model.add(0 <= expr);
+    }*/
+
+Weight Cplex::solve_(vector<Lit> &solution, double timeLimit) {   
+  //return a setting of all bvariables.
+  int status;
+
+  timeLimit = (timeLimit < 0) ? 1e+75 : timeLimit;
+  if(status = CPXsetdblparam(env, CPX_PARAM_TILIM, timeLimit))
+    processError(status, false, "Could not set CPLEX time limit");
+  if(status = CPXsetintparam(env, CPX_PARAM_MIPEMPHASIS,
+			     CPX_MIPEMPHASIS_OPTIMALITY))
+    processError(status, false, "Could not set CPLEX Optimality Emphasis");
+  
+  solution.clear();
+  /*cplex.setParam(IloCplex::TiLim, timeLimit);
+    cplex.setParam(IloCplex::MIPEmphasis, CPX_MIPEMPHASIS_OPTIMALITY);*/
+  
+  //update object to include newly added variables
+  /*if(varsInObj < bool_variables.getSize()) {
+    if(params.verbosity > 1) 
+      cout << "c Cplex::solve_: Adding " << bool_variables.getSize() - varsInObj
+	<< " bvars to objective\n";
+    IloNumArray wts(env);
+    IloNumVarArray newVars(env);
+    for(int i = varsInObj; i < bool_variables.getSize(); i++) {
+      wts.add(bvars.wt(in2ex(i)));
+      newVars.add(bool_variables[i]);
+    }
+    cplex_obj.setLinearCoefs(newVars, wts);
+    varsInObj = bool_variables.getSize();
+    if(params.verbosity > 2)
+      cout << "c Cplex::solve_: new objective fn " << cplex_obj;
+      }*/
+
+  if(params.mip_write_model) {
+    auto fn_start = params.instance_file_name.find_last_of('/');
+    std::string fname = "mip_" 
+      + params.instance_file_name.substr(fn_start+1)
+      + std::to_string(numSolves) + ".mps";
+    if(status = CPXwriteprob(env, mip, fname.c_str(), nullptr))
+      processError(status, false, "Could not write MIPS model");
+    //cplex.exportModel(fname.c_str());
+  }
+
+  if(CPXgetnummipstarts(env, mip) > 0) {
+    status = CPXdelmipstarts(env, mip, 0, CPXgetnummipstarts(env, mip)-1);
+    if(status)
+      processError(status, false, "CPLEX Failed to Delete MIP Starts");
+  }
+
+  status = CPXmipopt(env, mip);
+  if(status) 
+    processError(status, false, "CPLEX Failed to optmize MIP");
+  status = CPXgetstat(env, mip);
+  if(status == CPXMIP_OPTIMAL || status == CPXMIP_OPTIMAL_TOL)
+    return getSolution(solution);
+  else {
+    char buf[CPXMESSAGEBUFSIZE];
+    char* p = CPXgetstatstring(env, status, buf);
+    if(p)
+      cout << "c ERROR. Cplex status = " << status << " " << buf << "\n";
+    else
+      cout << "c ERROR. Cplex status = " << status << "\n";
+    return -1;
+  }
 }
 
-void Cplex::printInfeasibility() {
+Weight Cplex::getSolution(vector<Lit>& solution) {
+  //bvars.litOfCls is the literal with non-zero wt (relaxing the soft clause)
+  double objval {};
+  int status;
+  status = CPXgetobjval(env, mip, &objval);
+  if(status)
+    processError(status, false, "Problem getting mip objective value");
+
+  int nvars = CPXgetnumcols(env, mip);
+  double *vals = new double[nvars];
+  status = CPXgetx(env, mip, vals, 0, nvars-1);
+  if(status)
+    processError(status, false, "Problem getting mip variable assignments");
+
+  for(int sftCls=0; sftCls < bvars.n(); sftCls++) {
+    auto ci = ex2in(bvars.varOfCls(sftCls));
+    if(ci == var_Undef)
+      solution.push_back(~bvars.litOfCls(sftCls));
+    else {
+      auto val = vals[ci];
+      if(val > 0.99)
+	solution.push_back(bvars.litOfCls(sftCls));
+      else if (val < 0.01)
+	solution.push_back(~bvars.litOfCls(sftCls));
+      else { //found unset value
+	solution.clear();
+	return -1;
+      }
+    }
+  }
+  return objval;
+}
+
+/*void Cplex::printInfeasibility() {
  
     cout << model << endl;
     IloConstraintArray infeas(env);
@@ -288,4 +351,4 @@ void Cplex::printInfeasibility() {
     }
     prefs.end();
     infeas.end();
-}
+}*/

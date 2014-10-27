@@ -24,91 +24,103 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <errno.h>
 #include <signal.h>
+#include <iostream>
+
 #include "minisat/utils/System.h"
 #include "minisat/utils/Options.h"
-#include <iostream> 
-#include "maxhs/ifaces/miniSatSolver.h"
 #include "maxhs/core/MaxSolver.h"
+#include "maxhs/core/Wcnf.h"
+#include "maxhs/utils/Params.h"
+using std::cout;
 
-using namespace MaxHS;
+static MaxHS::MaxSolver* thesolver {};
 
-static MaxSolver* thesolver = nullptr;
-
-// Note that '_exit()' rather than 'exit()' has to be used. The reason is that 'exit()' calls
-// destructors and may cause deadlocks if a malloc/free function happens to be running (these
-// functions are guarded by locks for multithreaded use).
 static void SIGINT_exit(int signum) {
     if (thesolver) {
         thesolver->printStatsAndExit(signum, 1);
     } else {
         fflush(stdout);
         fflush(stderr);
-        _exit(1);
+        // Note that '_exit()' rather than 'exit()' has to be used.
+        // The reason is that 'exit()' calls destructors and may cause deadlocks 
+        // if a malloc/free function happens to be running (these functions are guarded by 
+        //  locks for multithreaded use).
+        _exit(0);
     }
-    //printf("SIGINT_exit: signum = %d\n", signum); fflush(stdout);
-    //_exit(0);
 }
 
-
 int main(int argc, char** argv) {
-    try {
-        setUsageHelp("USAGE: %s [options] <input-file>\n\n  where input may be either in plain or gzipped DIMACS.\n");
-		
+  try {
+    setUsageHelp("USAGE: %s [options] <input-file>\n  where input may be either in plain or gzipped DIMACS.\n");
+    
 #if defined(__linux__)
-        fpu_control_t oldcw, newcw;
-        _FPU_GETCW(oldcw); newcw = (oldcw & ~_FPU_EXTENDED) | _FPU_DOUBLE; _FPU_SETCW(newcw);
-        //fprintf(stderr, "WARNING: for repeatability, setting FPU to use double precision\n");
+    fpu_control_t oldcw, newcw;
+    _FPU_GETCW(oldcw); newcw = (oldcw & ~_FPU_EXTENDED) | _FPU_DOUBLE; _FPU_SETCW(newcw);
 #endif
-        
-        IntOption    cpu_lim("MAIN", "cpu-lim","Limit on CPU time allowed in seconds.\n", INT32_MAX, IntRange(0, INT32_MAX));
-        IntOption    mem_lim("MAIN", "mem-lim","Limit on memory usage in megabytes.\n", INT32_MAX, IntRange(0, INT32_MAX));
-	BoolOption   version("MAIN", "version", "Print version number and exit", false);
+    
+    IntOption    cpu_lim("MAIN", "cpu-lim","Limit on CPU time allowed in seconds.\n", INT32_MAX, IntRange(0, INT32_MAX));
+    IntOption    mem_lim("MAIN", "mem-lim","Limit on memory usage in megabytes.\n", INT32_MAX, IntRange(0, INT32_MAX));
+    BoolOption   version("MAIN", "version", "Print version number and exit", false);
+    
+    parseOptions(argc, argv, true);
+    params.readOptions();
 
-        parseOptions(argc, argv, true);
-	printf("c MaxHs-v%d.%d\n", 1, 5);
+    if(version) {
+      printf("MaxHS %d.%d\n", 2, 51);
+      return(0);
+    }
+    printf("c MaxHS %d.%d\n", 2, 51);
+    
+    signal(SIGINT, SIGINT_exit);
+    signal(SIGXCPU, SIGINT_exit);
+    signal(SIGSEGV, SIGINT_exit);
+    signal(SIGTERM, SIGINT_exit);
+    signal(SIGABRT, SIGINT_exit);
+    
+    if (cpu_lim != INT32_MAX){
+      rlimit rl;
+      getrlimit(RLIMIT_CPU, &rl);
+      if (rl.rlim_max == RLIM_INFINITY || (rlim_t)cpu_lim < rl.rlim_max){
+	rl.rlim_cur = cpu_lim;
+	if (setrlimit(RLIMIT_CPU, &rl) == -1)
+	  printf("c WARNING! Could not set resource limit: CPU-time.\n");
+      } }
+    
+    if (mem_lim != INT32_MAX){
+      rlim_t new_mem_lim = (rlim_t)mem_lim * 1024*1024;
+      rlimit rl;
+      getrlimit(RLIMIT_AS, &rl);
+      if (rl.rlim_max == RLIM_INFINITY || new_mem_lim < rl.rlim_max){
+	rl.rlim_cur = new_mem_lim;
+	if (setrlimit(RLIMIT_AS, &rl) == -1)
+	  printf("c WARNING! Could not set resource limit: Virtual memory.\n");
+      } }
+    
+    if(argc < 2) {
+      cout << "c ERROR: no input file specfied:\n"
+	"USAGE: %s [options] <input-file>\n  where input may be either in plain or gzipped DIMACS.\n";
+      exit(0);
+    }
 
-	if(version) {
-	  return(1);
-	}
- 
-        signal(SIGINT, SIGINT_exit);
-        signal(SIGXCPU, SIGINT_exit);
-        signal(SIGSEGV, SIGINT_exit);
-        signal(SIGTERM, SIGINT_exit);
-        signal(SIGABRT, SIGINT_exit);
+    Wcnf theFormula {};
+    if (!theFormula.inputDimacs(argv[1])) 
+      return 1;
+    theFormula.printFormulaStats();
 
-        MaxSolver S(new MaxHS_Iface::miniSolver);
-        thesolver = &S;
-
-        if (cpu_lim != INT32_MAX){
-            rlimit rl;
-            getrlimit(RLIMIT_CPU, &rl);
-            if (rl.rlim_max == RLIM_INFINITY || (rlim_t)cpu_lim < rl.rlim_max){
-                rl.rlim_cur = cpu_lim;
-                if (setrlimit(RLIMIT_CPU, &rl) == -1)
-		  thesolver->printComment("c WARNING! Could not set resource limit: CPU-time.");
-            } }
-
-        if (mem_lim != INT32_MAX){
-            rlim_t new_mem_lim = (rlim_t)mem_lim * 1024*1024;
-            rlimit rl;
-            getrlimit(RLIMIT_AS, &rl);
-            if (rl.rlim_max == RLIM_INFINITY || new_mem_lim < rl.rlim_max){
-                rl.rlim_cur = new_mem_lim;
-                if (setrlimit(RLIMIT_AS, &rl) == -1)
-		  thesolver->printComment("c WARNING! Could not set resource limit: Virtual memory.");
-            } }
-
-
-#if defined(__linux__)
-        //thesolver->printComment("c WARNING: for repeatability, setting FPU to use double precision.");
-#endif	  
-        thesolver->solve_maxsat(argv[1]);
-        thesolver->printStatsAndExit(-1, 0);
-    } catch (...) {
-        thesolver->printErrorAndExit("c ERROR: main() caught exception.");
-    } 
-    fflush(stdout);
-    fflush(stderr);
-    return 0;
+    MaxHS::MaxSolver S(&theFormula);
+    thesolver = &S;
+    S.solve_maxsat();
+    S.printStatsAndExit(-1, 0);
+  }
+  catch(std::bad_alloc) {
+    cout << "c Memory Exceeded\n";
+    thesolver->printStatsAndExit(100, 1);
+  }
+  catch (...) {
+    printf("c Unknown exception probably memory.\n");
+    thesolver->printStatsAndExit(200, 1);
+  } 
+  fflush(stdout);
+  fflush(stderr);
+  return 0;
 }

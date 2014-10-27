@@ -1,66 +1,76 @@
 /***********[SatSolver.h]
-Copyright (c) 2012-2013 Jessica Davies, Fahiem Bacchus
+ Copyright (c) 2012-2013 Jessica Davies, Fahiem Bacchus
+ 
+ Permission is hereby granted, free of charge, to any person obtaining a
+ copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ 
+ The above copyright notice and this permission notice shall be included
+ in all copies or substantial portions of the Software.
+ 
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ 
+ ***********/
 
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of this software and associated documentation files (the
-"Software"), to deal in the Software without restriction, including
-without limitation the rights to use, copy, modify, merge, publish,
-distribute, sublicense, and/or sell copies of the Software, and to
-permit persons to whom the Software is furnished to do so, subject to
-the following conditions:
-
-The above copyright notice and this permission notice shall be included
-in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
-LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
-WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-***********/
-
-/* Generic interface for maxhs to use a satsolver. 
-   Access to a particular sat solver is implemented by defining a 
+/* Generic interface for maxhs to use a satsolver.
+   Access to a particular sat solver is implemented by defining a
    derived class.
+ 
+   The interface maintains a mapping between interally numbered
+   variables and externally numbered variables.
+   This is to ensure that the internal variables are consecutively ordered,
+   so that the external theory can be fed to the sat solver in parts with
+   generating huge gaps in the variable numbering.
    
-   Note, design using virtual functions to interact in even simple ways with 
-   the sat solver is only viable if maxhs only calls the satsolver a few
-   thousand times. 
-*/
+   This also means however, that not all external variables will be given a value
+   by a found sat model.
+ 
+ */
 
 #ifndef IFACESAT_H
 #define IFACESAT_H
 
 #include <vector>
+#include <iostream> 
 #include "minisat/core/SolverTypes.h"
+#include "minisat/core/Solver.h"
 #include "minisat/utils/System.h"
 
-using namespace Minisat;
-using namespace std;
+using Minisat::Lit;
+using Minisat::lbool;
+using Minisat::Var;
+using Minisat::l_Undef;
+using Minisat::l_True;
+using Minisat::l_False;
+using Minisat::cpuTime;
+
+using std::vector;
 
 namespace MaxHS {
   class MaxSolver;
 }
 
 namespace MaxHS_Iface {
-class SatSolver {
-public:
-  SatSolver() : totalTime {0}, solves {0} {}
-  virtual ~SatSolver() {}
-
-  virtual bool status() const = 0;
-  //if false if unsat already detected (solver is in inconsistent state)
-
-  //solve under assumptions---track CPU time and number of calls.
-  //Give conflict and propagation budgets (-1 = no budget)
-  //return l_true/l_false/l_Undef formula is sat/unsat/budget-exceeded
-  //If unsat conflict is set.
-  //if sat use model and modelValue functions to get satisfying assignment
-  lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
-			   int64_t confBudget, int64_t propBudget) {
+  class SatSolver {
+  public:
+    SatSolver(): timer {0}, totalTime {0}, prevTotalTime {0}, stime{-1}, solves {0}, prevSolves{0} {}
+    virtual ~SatSolver() {}
+    
+    virtual bool status() const = 0;
+    //Return false if unsat already detected (solver is in inconsistent state)
+    
+    lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
+                      int64_t confBudget, int64_t propBudget) {
     /*******************************************************************
      Solve with assumptions. Track statistics.
      can set conflict and propagation budgets (-1 = no budget)
@@ -69,151 +79,142 @@ public:
      If unsat put conflict clause into conflict (mapped to external numbering)
      if sat, the "modelValue" function allow access to satisfying assignment
      *******************************************************************/
-    double stime = cpuTime();
-    lbool val = solve_(assumps, conflict, confBudget, propBudget);
-    totalTime += cpuTime() - stime;
-    solves++;
-    return val; 
-  }
-  
-  lbool solveBudget(const vector<Lit>& assumps,
-			   int64_t confBudget, int64_t propBudget)
-    { double stime = cpuTime();
-      lbool val = solve_(assumps, confBudget, propBudget);
+      stime = cpuTime();
+      prevTotalTime = totalTime;
+      lbool val = solve_(assumps, conflict, confBudget, propBudget);
       totalTime += cpuTime() - stime;
+      stime = -1;
       solves++;
-      return val; }
-
-
-  lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict, double timeLimit)  {
-    int64_t propBudget, props;
-    props = getProps();
-    if(props > 0 && totalTime > 0)
-      propBudget = props/totalTime * timeLimit;
-    else
-      propBudget = 1024*128;
+      return val; 
+    }
     
-    double stime = cpuTime();
-    lbool val = solve_(assumps, conflict, -1, propBudget);
-    if(props == 0 && val == l_Undef && totalTime > 0 && (getProps()*timeLimit)/totalTime > 1024*128) {
-      //if we couldn't compute a propBudget from past experience,
-      //try again with a properly computed propBudget---if we will do more work this time
-      val =  solve_(assumps, conflict, -1, (int64_t) (getProps()*timeLimit)/totalTime);
+    lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict, double timeLimit)  {
+      int64_t propBudget, props;
+      props = getProps();
+      if(props > 0 && totalTime > 0)
+        propBudget = props/totalTime * timeLimit;
+      else
+        propBudget = 1024*128;
+      
+      stime = cpuTime();
+      prevTotalTime = totalTime; 
+      lbool val = solve_(assumps, conflict, -1, propBudget);
       solves++;
+      if(props == 0 && val == l_Undef) {
+	auto moreProps = int64_t(getProps()/totalTime*timeLimit - propBudget);
+	if (moreProps > propBudget*.5) 
+	  //try again 
+	  val =  solve_(assumps, conflict, -1, moreProps);
+        solves++;
+      }
+      totalTime += cpuTime() - stime;
+      stime = -1;
+      return val; 
     }
-    totalTime += cpuTime() - stime;
-    solves++;
-    return val; 
-  }
-
-  lbool solveBudget(const vector<Lit>& assumps, double timeLimit)  {
-    int64_t propBudget, props;
-    props = getProps();
-    if(props > 0 && totalTime > 0)
-      propBudget = props/totalTime * timeLimit;
-    else
-      propBudget = 1024*128;
     
-    double stime = cpuTime();
-    lbool val = solve_(assumps, -1, propBudget);
-    if(props == 0 && val == l_Undef && totalTime > 0 && (getProps()*timeLimit)/totalTime > 1024*128) {
-      //if we couldn't compute a propBudget from past experience,
-      //try again with a properly computed propBudget---if we will do more work this time
-      val =  solve_(assumps, -1, (int64_t) (getProps()*timeLimit)/totalTime);
-      solves++;
+    lbool solve(const vector<Lit>& assumps, vector<Lit>& conflict)
+    { return  solveBudget(assumps, conflict, -1, -1); }
+    
+    lbool solve()
+    { vector<Lit> tc; return solve(vector<Lit>{}, tc); }
+
+    lbool solve(const vector<Lit> & assumps)
+    { vector<Lit> tc; return solve(assumps, tc); }
+
+    lbool solve(Lit l) 
+    { vector<Lit> tc; return solve(vector<Lit> {l}, tc); }
+
+    
+    //simplify clauses according to detected forced literals.
+    //return false if unsat already detected
+    virtual bool simplify() = 0;
+    
+    //use unit prop to find literals implied by a conjunction of literals "assumps:
+    //return false if assumps causes contradiction ---> ~assumps is forced
+
+    virtual bool findImplications(const vector<Lit> &assumps, vector<Lit>& imps) = 0;
+    virtual bool findImplications(const Lit p, vector<Lit>& imps) {
+      return findImplications({p}, imps); }
+
+    virtual vector<Lit> getForced(int index) = 0; 
+
+    //data from the solver
+    virtual int nAssigns() const = 0; //# assigned variables
+    virtual int nClauses() const = 0; //# original clauses
+    virtual int nVars() const = 0;    //# variables
+    
+    //Reduce a sequence of lits by values forced at decision level 0.
+    //   ==> true if sequence has true or complimentary lits
+    //   ==> false otherwise, but also reset lts to remove any falsified lits.
+    //
+    virtual bool reduceClause(vector<Lit>& lts) const = 0;
+    
+    //add clause to theory, return theory status
+    virtual bool addClause(const vector<Lit>& lts) = 0;
+    bool addClause(Lit p) { vector<Lit> tmp; tmp.push_back(p); return(addClause(tmp)); }
+
+    //install variable b as a new control variables. b must not have been previously added
+    //if decisionVar is false the solver won't branch on b, if polarity is set when the solver
+    //does branch on b it will set its value to polarity (l_Undef lets the solver pick)
+    virtual void newControlVar(Var b, bool decisionVar=true, lbool polarity=l_Undef) = 0;
+    //free variable by setting l to TRUE, simplifying, and freeing var(l)
+    //to be available for future use.
+    virtual void freeVar(Lit l)  = 0;
+
+    //uset b as a decision variable.
+    virtual void setNoDecision(Var b) = 0;
+
+    //get info from clause
+    virtual void printLit(Lit l) const = 0;
+    
+    //Reverse heuristic ordering of variables
+    virtual void invertVarActivities() = 0;
+    
+    //prune learnts 
+    virtual void pruneLearnts(MaxHS::MaxSolver *S) = 0;
+    
+    //obtain truth assignments of last model found by SAT solver.
+    //The SAT solver will only set those variables it has been given, so
+    //values for external variables the SAT solver does not know about 
+    //will be l_Undef.
+    virtual lbool modelValue(Lit p) const = 0;
+    virtual lbool modelValue(Var x) const = 0;
+    
+    //get current truth values (only set if variable is forced)
+    virtual lbool curVal(Var x) const = 0;
+    lbool curVal(Lit p) const { return curVal(var(p)) ^ sign(p); }
+    
+    //stats
+    //Use startTimer and elapTime to accumulate time over a set of SAT solver calls.
+    //nSolves() counts number of calls since startTimer
+    //solveTime for time of most recent call.
+    void startTimer() { timer = totalTime; prevSolves = solves; }
+    double elapTime() { return totalTime-timer; }
+    double solveTime() { return totalTime-prevTotalTime; }
+    double total_time() {
+      if (stime >=0) {
+	totalTime += cpuTime() - stime;
+	stime = -1;
+      }
+      return totalTime;
     }
-    totalTime += cpuTime() - stime;
-    solves++;
-    return val; 
-  }
-
-  bool solve(const vector<Lit>& assumps, vector<Lit>& conflict)  {
-    return  solveBudget(assumps, conflict, -1, -1) == l_True; 
-  }
-
-  bool solve(const vector<Lit>& assumps)
-    { return  solveBudget(assumps, -1, -1) == l_True; }
-
-  //actual interface to sat solver.
-  virtual lbool solve_(const vector<Lit>& assumps, vector<Lit>& conflict,
-			   int64_t confBudget, int64_t propBudget) = 0;
-  //access conflict directly
-  virtual lbool solve_(const vector<Lit>& assumps, 
-			   int64_t confBudget, int64_t propBudget) = 0;
-
-  virtual LSet& getConflict() = 0;
+    int nSolvesSinceTimer() { return (int) solves-prevSolves; }
+    int nSolves() { return (int) solves; }
+	
+    virtual uint64_t getProps() const  = 0;
+    virtual uint64_t getConfs() const  = 0;
+    
+  protected:
+    //interface to solver
+    virtual lbool solve_(const vector<Lit>& assumps, vector<Lit>& conflict,
+			 int64_t confBudget, int64_t propBudget) = 0;
+    
+    //stats
+    double timer, totalTime, prevTotalTime, stime;
+    int solves;
+    int prevSolves;
+  }; //Class SatSolver
   
-  //simplify clauses according to detected forced literals.
-  //return false if unsat already detected
-  virtual bool simplify() = 0;
-
-  //use unit prop to find implied literals of 'p'
-  //return false if p causes contradiction ---> ~p is forced
-  virtual bool findUnitImps(const Lit p, vector<Lit>& unitImps) = 0;
-
-  //data from the solver
-  virtual int nAssigns() = 0; //# assigned variables
-  virtual int nClauses() = 0; //# original clauses
-  virtual int nVars() = 0;    //# variables
-
-//Reduce a sequence of lits by values forced at decision level 0.
-//   ==> true if sequence has true or complimentary lits
-//   ==> false otherwise, but also reset lts to remove any falsified lits. 
-//
-  virtual bool reduceClause(vector<Lit>& lts) = 0;
-
-//Define a variable in solver for every lit. 
-  virtual void addVars(const vector<Lit>& lts) = 0;
-  void addVar(Lit p) { vector<Lit> tmp (1, p); addVars(tmp); }
-
-//add clause to theory, return theory status
-  virtual bool addClause(vector<Lit> lts) = 0;
-  bool addClause(Lit p) { vector<Lit> tmp = {p}; return(addClause(tmp)); }
-
-//get info from clause
-  virtual int clsSize(const int clsIndex) const = 0;
-  virtual Lit clsLit(const int clsIndex, const int litindex) const = 0;
-  virtual void printLit(const Lit l) const = 0;
-
-//Reverse heuristic ordering of variables
-  virtual void invertVarActivities() = 0;
-
-//prune learnts
-  virtual void pruneLearnts(MaxHS::MaxSolver *S) = 0;
-
-//obtain last model (get full model if you need to get many)
-  virtual vector<lbool> model() = 0;
-  virtual lbool modelValue(Lit p) const = 0; 
-  virtual lbool modelValue(Var x) const = 0; 
-  
-//get current truth values (get all values if you need to get many)
-  virtual vector<lbool> curVals() = 0;
-  virtual lbool curVal(Var x) = 0;
-  lbool curVal(Lit p) { return curVal(var(p)) ^ sign(p); }
-
-//stats
-  double totalTime;
-  uint64_t solves;
-  virtual uint64_t getProps() const  = 0;
-  virtual uint64_t getConfs() const  = 0;
-
-//utilities 
-  template<typename T>
-  void vector2vec(const vector<T> &from, vec<T> &to)
-    {
-      to.clear();
-      for(size_t i = 0; i < from.size(); i++) to.push(from[i]);
-    }
-
-  template<typename T>
-  void vec2vector(const vec<T> &from, vector<T> &to)
-    {
-      to.clear();
-      for(int i = 0; i < from.size(); i++) to.push_back(from[i]);
-    }
-
-}; //Class SatSolver
-
 } //namespace
 
 #endif 

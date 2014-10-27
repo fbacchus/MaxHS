@@ -26,20 +26,21 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define MaxSolver_h
 
 #include <string>
-#include <sstream>
-#include <set>
-#include <ext/hash_map>
-#include "minisat/mtl/Heap.h"
-#include "minisat/mtl/Alg.h"
-#include "minisat/utils/Options.h"
+#include <vector>
+
+using std::vector;
+
 #include "minisat/core/SolverTypes.h"
 #include "maxhs/core/MaxSolverTypes.h"
 #include "maxhs/ifaces/SatSolver.h"
+#include "maxhs/ifaces/muser.h"
 #include "maxhs/ifaces/Cplex.h"
-#include "maxhs/core/dlink.h"
-#include "minisat/utils/System.h"
+#include "maxhs/core/Wcnf.h"
+#include "maxhs/core/Bvars.h"
+#include "maxhs/utils/Params.h"
+#include "maxhs/core/Assumptions.h"
+#include "maxhs/ds/Packed.h"
 
-using namespace __gnu_cxx;
 using namespace MaxHS_Iface;
 using namespace Minisat;
 
@@ -47,209 +48,135 @@ namespace MaxHS {
 
 class MaxSolver {
 public:
-  MaxSolver(MaxHS_Iface::SatSolver* s);
+  MaxSolver(Wcnf *f);
   ~MaxSolver();
-
-  MaxHS_Iface::SatSolver* satsolver;
-  Cplex *cplex;
-
-  Weight opt;
-  Weight baseCost;
-  Weight LB;
-  Weight UB;
-  vector<lbool> UBmodel;
-  vector<Weight> bvar_weights; 
-  vector<int> bvars;
-  bool weighted;
+  void solve_maxsat();  //Solve the initialized Wcnf
+  Weight UB() { return theWcnf->totalWt() - sat_wt; }
+  Weight LB() { return lower_bnd; }
+  bool isSolved() { return solved; }
+  bool isUnsat() { return unsat; }
+  const vector<lbool>& getBestModel() { return UBmodel; }
+  const Wcnf* getWcnf() { return theWcnf; }
   
-  // Options
-  int verbosity;
-  int min_type;
-  bool sort_min;
-  bool delete_hard_learnts;
-  bool disjoint_phase;
-  bool disjoint_always;
-  bool invertAct;
-  bool resetLearnts;
-  bool invertAct_rerefute;
-  bool resetLearnts_rerefute;
-  bool compare_assumps;
-  int  nAssumpsShuffle;
-  bool shuffleFirstTime;
-  // Noncore Options
-  bool noncore_constraints;
-  bool seed_valued;
-  bool seed_equiv;
-  bool seed_implications;
-  int  seed_reverse;
-  bool seed_cores_only;
-  bool seed_noncores_only;
-  // Nonoptimal Options
-  int nonoptimal;
-  double nonopt_frac_to_relax;
-  int nonopt_plateaus;
-     
- 
-  // Statistics
-  int amountConflictMin; 
-  int totalConstraintSize;   // The total size of all constraints added to cplex
-  int numConstraints;        // The number of constraints added to cplex
-  int numPlateaus;           // The number of different LB values encountered. 
-  double initialTime;
-  double beginCplexTime;
-  double beginSATtime;
-
-  int numOrigVars;
-  int numBVars;
-  vector<vector<Lit> > origSoftClauses;
-  vector<Weight> origSoftClsWeights;
-  string inputFileName;
-  // Noncore stuff
-//  int numOrigClauses;
-  int numHardClauses;
-  int numOrigUnitSofts;
-  int beginIndexOfBVarEquivClauses;
-  int endIndexOfBVarEquivClauses;
-  vector<vector<Lit> > equivClauses;
-  hash_map<int, int> lit_equiv_bvar;
-
-  /* For sorting the conflict before it is minimized
-     Can't make all lits in conflict true. Neg bvars:
-     must make one true == relax one of these
-     soft clauses. So try to remove low weight neg bvars
-     so that we must relax a high weight soft.
-  
-     Pos bvar: must make one false == can't relax
-     one of these softs. So try to remove high weight pos
-     bvars, so that we are blocked only from relaxing low 
-     weight softs.
-
-     Forcing relaxations is better than blocking.
-     So try to remove all positives first.
-
-     We remove from the end, so sort to put best removals at the end*/
-
-  struct minConflictLt {
-    const vector<Weight>& bweights;
-    const int &offset; 
-    bool operator () (Lit i, Lit j) const { 
-      bool case1 = (sign(i) && !sign(j));
-      bool case2 = sign(i) && sign(j) && (bweights[var(i)-offset] < bweights[var(j)-offset]); 
-      bool case3 =  !sign(i) && !sign(j) && (bweights[var(i)-offset] > bweights[var(j)-offset]);
-      return case1 || case2 || case3;  } 
-    minConflictLt(const vector<Weight> &bw, const int &nv) : bweights(bw), offset(nv) { }
-  };
-  minConflictLt  minconflict_comp;
-
-  struct minwtLt {
-    const vector<Weight>& bweights;
-    const int &offset; 
-    bool operator () (Lit i, Lit j) const { 
-      return bweights[var(i)-offset] < bweights[var(j)-offset]; }
-    minwtLt(const vector<Weight> &bw, const int &nv) : bweights(bw), offset(nv) { }
-  };
-  minwtLt  minwt_comp;
-
-  // Nonoptimal stuff
-  bool nonopt_solveexactly;
-  bool karp_do_greedy;
-  bool wasOptimalSolution;
-  double lastGreedyTime;
-  int satCallsSinceCplex;
-  int satCallsSinceGreedy;
-
-  vector<int> bvarOccur;      // The number of *true* cores each bvar appears in
-  struct BVarOccurLt {
-    const vector<int> &bvaroccur;
-    bool operator () (int x, int y) const { return bvaroccur[x] > bvaroccur[y]; }
-    BVarOccurLt(const vector<int> &occ) : bvaroccur(occ) { }
-  };
-  Heap<int,BVarOccurLt> occ_heap;
-  dlink_matrix *coresmatrix; 
-  enum { nonopt_rand = 1, nonopt_maxoccur, nonopt_frac, nonopt_greedy, nonopt_karp, nonopt_cplex };
-
-  // To sort b-variables so that negative ones come before the positive, and within each group they are sorted by var index 
-  struct bvarNegFirstLt {
-    bool operator () (Lit i, Lit j) const { return (sign(i) && !sign(j)) || ((sign(i) == sign(j)) && (var(i) < var(j))); } 
-    bvarNegFirstLt() { }
-  };
-  bvarNegFirstLt  bvar_negfirst_comp;
-
-  // Used by Dimacs.h during parsing of the input file
-  void setNumOrigVars(int n) { numOrigVars = n; }
-  void setHardWeight(Weight w) { if (w < UB) UB = w; }
-  Weight getHardWeight() { return UB; }
-  bool addClause(vector<Lit> &lits, Weight w);
-   
-  void setUBToHardClauseSolution();
-  Weight getModelWt();
- 
-  void solve_maxsat(const char *inputfilename);
-
-  // Called by the SAT solver to tell whether or not a learnt clause can be deleted
-  bool deleteLearntTest(const Clause &c) const;
-  bool addBVarConstraint(vector<Lit> &cls);
-  void addBVarConstraint(Lit blit, vector<Lit> &impl);
-
+  //Not private but not for general users.
+  //Used by interrupt trap
   void printStatsAndExit(int signum, int exitType);
-  void printOutput(const char *msg, Weight val);
-  void printOutput(const char *msg, const char *val);
-  void printErrorAndExit(const char *msg);
-  void printComment(const char *msg);
-  void printSolution(const vector<lbool> model);
+  // Called by the SAT solver to tell whether or not a learnt clause
+  // can be deleted
+  bool deleteLearntTest(const vector<Lit>& c) const;
+  Bvars bvars;
 
 protected:
+  Wcnf* theWcnf;
+  SatSolver* satsolver;
+  SatSolver* greedysolver;
+  Muser* muser;
+  Cplex* cplex;
+  //BOUNDS
+  Weight sat_wt;     //wt of soft clauses known to be satisfiable.
+  Weight lower_bnd;  //lower bound on wt false soft clauses.
+  lbool  hards_are_sat; //
+  void updateLB(Weight wt) { if (wt > lower_bnd) lower_bnd = wt; }
+  Weight updateUB();
+  Weight getForcedWt(int trail_index = 0);
+  Weight getSatClsWt();
+  Weight getWtOfBvars(const vector<Lit>& blits);
 
-  bool ok;    //If FALSE either LB>UB---supplied upper bound or Hards are UNSAT.
-  void checkParams();    
-  void printInputStats();
-  bool relax(vector<int> &bvars, vector<Weight> &bvarcoeffs);
-  bool disjointPhase(const vector<int> &bvars);
-  void seqOfSAT_maxsat();
-  // Noncore stuff
-  void initBVarEquiv();
-  void seed_valued_bvars(const vector<int> &bvars);
-  void seed_equivalence();
-  void seed_b_implications(const vector<int> &bvars, const vector<vector<Lit> > &b_impls);
-  void seed_rev_implications(vector<vector<Lit> > &rev_impls);
-  void advancedSeedCplex(vector<int> &bvars);
-  // Nonoptimal stuff
-  void approxBVarSolution(vector<Lit> &soln);
-  void approxBVarSolution(vector<Lit> &soln, vector<Lit> &newestcore);
-  void incrBVarOccurrences(vector<Lit> &core);
-  Lit  maxOccurringInCore(vector<Lit> &core);
-  void fracOfCore(vector<Lit> &core, double fracToReturn, vector<Lit> &maxoccur);
+  vector<lbool> UBmodel;
+  void setUBModel();
 
-  void updateLB(vector<Lit> &assumps);
-  void reportCplex(vector<Lit> &oldassumps, vector<vector<Lit> > &cplexsolns);
-  void reportSAT(vector<Lit> &conflict);
+  //SAT solver interaction
+  void addHards(SatSolver*);
+  void addHards(SatSolver*, const vector<int>& indicies);
 
-  bool satsolve(vector<Lit> &inAssumps, vector<Lit> &outConflict);
-  bool satsolve_min(vector<Lit> &inAssumps, vector<Lit> &outConflict);
-  lbool satsolve_min_budget(vector<Lit> &inAssumps, vector<Lit> &outConflict, double timeLim);
-  void minimize_rerefute(vector<Lit> &con);
-  void minimize_greedy(vector<Lit> &con);
-  bool testRemoval(const vector<Lit> &con, size_t indexToRemove);
-    
+  //include b-var in softs. Boolean flag true
+  //means sat solver is allowed to use the b-vars
+  //as decisions.
+  void addSofts(SatSolver*, bool b_var_decision); 
+  void addSofts(SatSolver*, bool b_var_decision, const vector<int>& indicies);
+
+  //add and remove b-var equivalent clauses
+  //must call rmSoftEqs before every addSoftEqs except for first call.
+  Var eqCvar; //control variable for b-var equivalences.
+  void addSoftEqs(SatSolver*, bool removable); 
+  void addSoftEqs(SatSolver*, bool removable, const vector<int>& indicies);
+  void rmSoftEqs(SatSolver* slv) {
+    //assert eqCvar and thus remove all eq clauses after 
+    //a call to simplify
+    slv->freeVar(mkLit(eqCvar, false));
+  }
+  Lit activateSoftEqLit() { 
+    //return assumption that activates the soft equivalent clauses 
+    return mkLit(eqCvar, true); } 
+
+  //set up var--> satisfied softs map.
+  void initSftSatisfied();
+
+  //turn off b vars as decisions.
+  void setNoBvarDecisions();
+
+  int nextNewVar; //for adding additional variables beyond the b-vars
+		  //+ original vars + eqCvar to the maxsat theory.;
+  
+  int getNextNewVar() { return nextNewVar++; }
+
+  // Statistics
+  int amountConflictMin; 
+
+  //Manage Cplex and Greedy solver Clauses.
+  vector<int> bLitOccur; 
+  Packed_vecs<Lit> cplexClauses;
+  Packed_vecs<int> sftSatisfied; //map from ordinary var --> satisfied sft clauses
+
+  //TODO better abstraction to transfer unit clauses (or other clauses)
+  //     between solvers
+  void greedyAddNewForcedBvars();
+  void cplexAddNewForcedBvars();
+  void satSolverAddNewForcedVars();
+  void muserAddNewForcedVars();
+  //If using fb (no eq clauses) force negated b-vars from satisfied softs.
+  void satSolverAddBvarsFromSofts();
+
+  
+  void cplexAddNewClauses();
+  bool cplexAddCls(const vector<Lit>& cls);
+  void storeCplexCls(const vector<Lit>& cls);
+
+  //output routines
+  void printErrorAndExit(const char *msg);
+  void printSolution(const vector<lbool>& model);
+  void printCurClause(const vector<Lit> &cls);
+  void reportCplex(Weight solnWt);
+  void reportSAT_min(lbool result, double iTime, size_t orig_size, int nMins, double mTime, size_t final_size);
+  void reportForced(vector<Lit> &forced, Weight wt);
   void outputConflict(const vector<Lit> &conf);
+  void optFound(std::string reason);
+  void unsatFound();
 
-  bool isOrigLit  (Lit l) const;
-  int  bvarIndex(Lit l) const;
-  Lit  bvarIndexToLit(int i, bool sign) const;
-  void finished();
+  //status flags
+  bool solved;   //True when finished solving.
+  bool unsat;    //Hards are UNSAT or no solution of cost < dimacs top
+
+  //internal Subroutines
+  void disjointPhase();
+  void seqOfSAT_maxsat();
+  void feedCplex(int gIter, Assumps& a, int nSoFar, size_t sizeSoFar);
+
   // Noncore stuff
-  bool bvar_clause_and_check_core(int clsIndex, vector<Lit> &bvarcls);
-  bool advanced_bvar_clause_and_check_core(int clsIndex, vector<Lit> &bvarcls, vector<vector<Lit> > &rev_impls);
-  void build_b_implications(const vector<int> &bvars, vector<vector<Lit> > &b_impls);
-  void build_rev_implications(vector<int> &bvars, vector<vector<Lit> > &b_impls, vector<vector<Lit> > &rev_impls);
+  void seed_equivalence();
+  vector<Lit> getBvarEqs();
+  bool isCore(const vector<Lit>& core);
 
-  //TODO move this to a utilities module
-  double elapTime(double stime) { return cpuTime() - stime; }
+  // Accumulate Cores 
+  vector<Lit> getAssumpUpdates(int sinceCplex, int sinceGreedy, vector<Lit>& core);
+  vector<Lit> greedySoln();
+  vector<Lit> fracOfCore(int nCplex, int nGreedy, vector<Lit> &core);
+  Lit maxOccurring(const vector<Lit>& core);
+  void incrBLitOccurrences(const vector<Lit> &core);
+  lbool satsolve_min(const Assumps &inAssumps, vector<Lit> &outConflict, double sat_cpu_lim, double mus_cpu_lim);
+  void minimize_muser(vector<Lit> &con, double mus_cpu_lim);
+  void check_mus(vector<Lit> &con);
 };
-
-inline bool MaxSolver::isOrigLit(Lit l) const { return var(l) < numOrigVars; }
-inline int MaxSolver::bvarIndex(Lit l) const { return var(l) - numOrigVars; }
-inline Lit MaxSolver::bvarIndexToLit(int i, bool sign) const { return mkLit(i + numOrigVars, sign);  }
 
 } //namespace
 

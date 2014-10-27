@@ -27,47 +27,49 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <vector>
 #include <algorithm>
+#include <ostream>
 #include "maxhs/ifaces/miniSatSolver.h"
 #include "maxhs/core/MaxSolver.h"
+#include "maxhs/utils/io.h"
 
 using namespace MaxHS_Iface;
 using namespace Minisat;
 
-miniSolver::miniSolver() 
-{ }
 
-miniSolver::~miniSolver()
-{ }
+/*************************************************/
+//Internal to external variable ordering mappings.
 
-bool miniSolver::status() const
+
+void miniSolver::ensure_mapping(const Var ex)
 {
+  if (ex >= (int) ex2in_map.size())
+    ex2in_map.resize(ex+1,var_Undef);
+  
+  if(ex2in_map[ex] == var_Undef) {
+    Var in {newVar()};
+    ex2in_map[ex] = in;
+    if (in >= (int) in2ex_map.size())
+      in2ex_map.resize(in+1, var_Undef);
+    in2ex_map[in] = ex;
+  }
+}
+
+
+/*************************************************/
+//Solver interface routines
+
+bool miniSolver::status() const {
   return Minisat::Solver::okay();
 }
 
 lbool miniSolver::solve_(const vector<Lit>& assumps, vector<Lit>& conflict,
-	     int64_t confBudget, int64_t propBudget) 
-{
-  vector2vec(assumps, Minisat::Solver::assumptions);
-  if(confBudget < 0)
-    conflict_budget = -1;
-  else
-    conflict_budget = conflicts + confBudget;
-  
-  if(propBudget < 0)
-    propagation_budget = -1;
-  else
-    propagation_budget = propagations + propBudget;
-  lbool val = Minisat::Solver::solve_();
-  vec2vector(Minisat::Solver::conflict.toVec(), conflict);
-  return val;
-}
-
-//Access conflict directly
-lbool miniSolver::solve_(const vector<Lit>& assumps, 
-	     int64_t confBudget, int64_t propBudget) 
-{
+			 int64_t confBudget, int64_t propBudget) {
   conflict.clear();
-  vector2vec(assumps, Minisat::Solver::assumptions);
+  Minisat::Solver::assumptions.clear();
+  for(auto lt : assumps) {
+    ensure_mapping(lt);
+    Minisat::Solver::assumptions.push(ex2in(lt));
+  }
   if(confBudget < 0)
     conflict_budget = -1;
   else
@@ -77,12 +79,10 @@ lbool miniSolver::solve_(const vector<Lit>& assumps,
     propagation_budget = -1;
   else
     propagation_budget = propagations + propBudget;
-  lbool val = Minisat::Solver::solve_();
-  return val;
-}
 
-LSet& miniSolver::getConflict() {
-  return Minisat::Solver::conflict;
+  lbool val = Minisat::Solver::solve_();
+  in2ex(Minisat::Solver::conflict.toVec(), conflict);
+  return val;
 }
 
 bool miniSolver::simplify()
@@ -90,11 +90,12 @@ bool miniSolver::simplify()
   return Minisat::Solver::simplify();
 }
 
-void miniSolver::cancelTrail(int level, vector<Lit>& bt_lits) {
+void miniSolver::cancelTrail(int level, vector<Lit>& bt_lits)
+{
   if (decisionLevel() > level){
     bt_lits.clear();
-    for (int c = trail.size()-1; c >= trail_lim[level]; c--){
-      bt_lits.push_back(trail[c]);
+    for (int c = trail.size()-1; c >= trail_lim[level]; c--) {
+      bt_lits.push_back(trail[c]); 
       Var      x  = var(trail[c]);
       assigns [x] = l_Undef;
     }
@@ -104,83 +105,181 @@ void miniSolver::cancelTrail(int level, vector<Lit>& bt_lits) {
   } 
 }
 
-bool miniSolver::findUnitImps(const Lit p, vector<Lit>& unitImps)
+void miniSolver::analyzeFinal(Lit p, LSet& out_conflict)
 {
-  int cur_dlevel = decisionLevel();
-  newDecisionLevel();
-  uncheckedEnqueue(p);
-  CRef confl = propagate();
-  if (confl != CRef_Undef) {
-    cancelUntil(cur_dlevel);
-    return false;
+  //Changes from original: stop resolving backwards when we hit an
+  //assumption literal.
+
+  out_conflict.clear();
+  out_conflict.insert(p);
+  
+  if (decisionLevel() == 0)
+    return;
+  
+  seen[var(p)] = 1;
+
+  LSet assumps;
+  for(int i = 0; i < assumptions.size(); i++) {
+    assumps.insert(assumptions[i]);
   }
-  cancelTrail(cur_dlevel, unitImps);
-  unitImps.pop_back(); // remove p itself
+  
+  for (int i = trail.size()-1; i >= trail_lim[0]; i--){
+    Var x = var(trail[i]);
+    if (seen[x]){
+      if (reason(x) == CRef_Undef || assumps.has(trail[i])){
+	//note assumptions has ~p in it and ~p was forced. So x == p won't trigger.
+	assert(level(x) > 0);
+	assert(x != var(p));
+	out_conflict.insert(~trail[i]);
+      }else{
+	Clause& c = ca[reason(x)];
+	for (int j = 1; j < c.size(); j++)
+	  if (level(var(c[j])) > 0)
+	    seen[var(c[j])] = 1;
+      }
+      seen[x] = 0;
+    }
+  }
+  
+  seen[var(p)] = 0;
+}
+
+bool miniSolver::findImplications(const vector<Lit> &assumps, vector<Lit>& imps)
+{
+  vec<Lit> a;
+  for(auto lt : assumps) {
+    ensure_mapping(lt);
+    a.push(ex2in(lt));
+  }
+  imps.clear();
+
+  vec<Lit> r;
+  bool val = Minisat::Solver::implies(a, r);
+  if(!val) return val;
+
+  for(int i=0; i < r.size(); i++)
+    imps.push_back(in2ex(r[i]));
   return true;
 }
 
-int miniSolver::nAssigns() 
+vector<Lit> miniSolver::getForced(int index) {
+  static vector<Lit> forced {};
+  updateForced(forced);
+  vector<Lit> tmp;
+  for(size_t i = index; i < forced.size(); i++)
+    tmp.push_back(in2ex(forced[i]));
+  return tmp;
+}
+
+void miniSolver::updateForced(vector<Lit>& frc) {
+  int limit = Solver::trail_lim.size() > 0 ?
+    Solver::trail_lim[0] : Solver::trail.size();
+  int i {0};
+
+  if(frc.size() > 0) {
+    i = frc.size() - 1;
+    while(i < limit && Solver::trail[i++] != frc.back());
+  }
+
+  for( ; i < limit; i++)
+    if(in2ex(Solver::trail[i]) != lit_Undef)
+      frc.push_back(Solver::trail[i]);
+}
+
+int miniSolver::nAssigns() const
 {
   return Minisat::Solver::nAssigns();
 }
 
-int miniSolver::nClauses()
+int miniSolver::nClauses() const
 {
   return Minisat::Solver::nClauses();
 }
 
-int miniSolver::nVars()
+int miniSolver::nVars() const
 {
   return Minisat::Solver::nVars();
 }
 
-bool miniSolver::reduceClause(vector<Lit>& lts)
+bool miniSolver::reduceClause(vector<Lit>& lts) const
 {
   // remove false/duplicate literals return false if true lits is present
   assert(decisionLevel() == 0);
   std::sort(lts.begin(), lts.end());
-  Lit p; size_t i, j;
-  for (i = j = 0, p = lit_Undef; i < lts.size(); i++)
-    if ((var(lts[i]) < nVars() && value(lts[i]) == l_True) || lts[i] == ~p) { 
-      return true; //clause is true
-    } else if ((var(lts[i]) >= nVars() || value(lts[i]) != l_False) && lts[i] != p)
-      lts[j++] = p = lts[i];
-  lts.resize(lts.size() - (i - j));
+
+  //In this loop i is the (index of) next literal to examine. j is the index of
+  //the last literal to keep. j=-1 means nothing has yet been kept.
+  int j {-1};
+  for(size_t i =0; i< lts.size(); i++) {
+    Lit in = ex2in(lts[i]);
+    lbool val {(in == lit_Undef) ? l_Undef : value(in)};
+    if(val == l_True || (j > 0 && lts[i] == ~lts[j])) {
+      return true; 
+    }
+    if(val == l_False || (j > 0 && lts[i] == lts[j]))
+      continue;
+
+    lts[++j] = lts[i];
+  }
+  lts.resize(j+1);
+
   return false; //clause not true
 }
 
-void miniSolver::addVars(const vector<Lit>& lts)
+bool miniSolver::addClause(const vector<Lit>& lts) 
 {
-  for (size_t i = 0; i < lts.size(); i++) {
-    // All variables are decision variables 
-    while (var(lts[i]) >= nVars()) newVar();  
+  vec<Lit> ps;
+  for(auto lt: lts) {
+    ensure_mapping(lt);
+    ps.push(ex2in(lt));
+  }
+
+  //cout << "mini addCls: ext=" << lts << " int=" << ps << "\n";
+
+  return Minisat::Solver::addClause_(ps); 
+}
+
+void miniSolver::newControlVar(Var b, bool dvar, lbool pol) {
+
+  if (b >= static_cast<Var>(ex2in_map.size()))
+    ex2in_map.resize(b+1, var_Undef);
+  if (ex2in_map[b] != var_Undef)
+    cout << "c ERROR: new control variable for variable that already exists (" << b << ")";
+  else {
+    Var c {newVar(pol, dvar)};
+    ex2in_map[b] = c;
+    if(c >= static_cast<Var>(in2ex_map.size()))
+      in2ex_map.resize(c+1, var_Undef);
+    in2ex_map[c] = b;
   }
 }
 
-bool miniSolver::addClause(const vector<Lit> lts) 
-{
-  vec<Lit> ps;
-  vector2vec(lts, ps);
-  return Minisat::Solver::addClause_(ps); 
-
+void miniSolver::freeVar(Lit l) {
+  //remove mapping and assert l to sat solver.
+  Var in = var(l) < (int) ex2in_map.size()  ? ex2in_map[var(l)] : var_Undef;
+  if(in != var_Undef) {
+    ex2in_map[var(l)] = var_Undef;
+    in2ex_map[in] = var_Undef;
+    releaseVar(mkLit(in, sign(l)));
+  }
 }
 
-int miniSolver::clsSize(const int clsIndex) const
-{
-  return ca[clauses[clsIndex]].size();
-}
-
-Lit miniSolver::clsLit(const int clsIndex, const int litIndex) const
-{
-  return ca[clauses[clsIndex]][litIndex];
+void miniSolver::setNoDecision(Var b) {
+  //unset b as a decision variable;
+  Var in = b < (int) ex2in_map.size() ? ex2in_map[b] : var_Undef;
+  if(in != var_Undef) {
+    setDecisionVar(in, false);
+  }
 }
 
 void miniSolver::printLit(const Lit l) const 
 {
-  printf(/*"%s%d"*/ "%s%d:%c",
-	 sign(l) ? "-" : "",
-	 var(l)+1 ,
-	 value(l) == l_True ? '1' : (value(l) == l_False ? '0' : 'X'));
+  cout << (sign(l) ? "-" : "") << var(l)+1 << ":";
+  Lit in = ex2in(l);
+  if(in == lit_Undef || value(in) == l_Undef)
+    cout << 'U';
+  else 
+    cout << (value(in) == l_True ? 'T' : 'F');
 }
 
 void miniSolver::invertVarActivities() 
@@ -204,12 +303,19 @@ void miniSolver::invertVarActivities()
   rebuildOrderHeap();
 }
 
+
 void miniSolver::pruneLearnts(MaxHS::MaxSolver *S) 
+//TODO: use a function pointer or allow a lambda to be passed
 {
   int i, j;
+  vector<Lit> exCls;
   for (i = j = 0; i < learnts.size(); i++){
     Clause& c = ca[learnts[i]];
-    if (!locked(c) && S->deleteLearntTest(c))
+    exCls.clear();
+    for(int i = 0; i < c.size(); i++)
+      exCls.push_back(c[i]);
+    
+    if (!locked(c) && S->deleteLearntTest(exCls))
             removeClause(learnts[i]);
         else
             learnts[j++] = learnts[i];
@@ -218,33 +324,37 @@ void miniSolver::pruneLearnts(MaxHS::MaxSolver *S)
     checkGarbage();
 }
 
-//obtain last model (get full model if you need to get many)
-vector<lbool> miniSolver::model() 
+lbool miniSolver::modelValue(const Lit p) const 
 {
-  vector<lbool> tmp;
-  vec2vector(Minisat::Solver::model, tmp);
-  return tmp; //exploit move semantics for C++11
+  Lit in = ex2in(p);
+  if (in == lit_Undef)
+    return l_Undef;
+  else
+    return Minisat::Solver::modelValue(in);
 }
 
-lbool miniSolver::modelValue(Lit p) const 
+lbool miniSolver::modelValue(const Var x) const 
 {
-  return Minisat::Solver::modelValue(p);
+  Var in = ex2in(x);
+  if (in == var_Undef)
+    return l_Undef;
+  else
+    return Minisat::Solver::modelValue(in);
 }
 
-lbool miniSolver::modelValue(Var x) const 
-{
-  return Minisat::Solver::modelValue(x);
+lbool miniSolver::curVal(Var x) const {
+  Var in = ex2in(x);
+  if(in == var_Undef)
+    return l_Undef;
+  else  
+    return Minisat::Solver::value(in);
 }
 
-vector<lbool> miniSolver::curVals()
-{
-  vector<lbool> tmp;
-  for(int i = 0; i < nVars(); i++) 
-    tmp[i] = Minisat::Solver::value(i);
-  return tmp;
-}
-
-lbool miniSolver::curVal(Var x) {
-  return Minisat::Solver::value(x);
+lbool miniSolver::curVal(Lit x) const {
+  Lit in = ex2in(x);
+  if(in == lit_Undef)
+    return l_Undef;
+  else  
+    return Minisat::Solver::value(in);
 }
 

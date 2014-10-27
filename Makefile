@@ -19,8 +19,6 @@ all: r lr
 ## Cplex library location (configure these variables with "make config")
 
 CPLEXLIBDIR   ?= /pkgs/ilog/cplex125/cplex/lib/x86-64_sles10_4.1/static_pic
-CONCERTLIBDIR ?= /pkgs/ilog/cplex125/concert/lib/x86-64_sles10_4.1/static_pic
-CONCERTINCDIR ?= /pkgs/ilog/cplex125/concert/include
 CPLEXINCDIR   ?= /pkgs/ilog/cplex125/cplex/include
 
 # Directory to store object files, libraries, executables, and dependencies:
@@ -46,8 +44,6 @@ config:
 	   echo 'MAXHS_DEB?=$(MAXHS_DEB)'       ; \
 	   echo 'MAXHS_PRF?=$(MAXHS_PRF)'       ; \
 	   echo 'CPLEXLIBDIR?=$(CPLEXLIBDIR)'   ; \
-	   echo 'CONCERTLIBDIR?=$(CONCERTLIBDIR)'   ; \
-	   echo 'CONCERTINCDIR?=$(CONCERTINCDIR)'   ; \
 	   echo 'CPLEXINCDIR?=$(CPLEXINCDIR)'       ; \
 	   echo 'prefix?=$(prefix)'                 ) > config.mk
 
@@ -69,12 +65,12 @@ MAXHS_SLIB = lib$(MAXHS).a#  Name of Maxhs static library.
 
 #-DIL_STD is a IBM/CPLEX issue
 
-MAXHS_CXXFLAGS = -DIL_STD -I. -I$(CPLEXINCDIR) -I$(CONCERTINCDIR) 
+MAXHS_CXXFLAGS = -DIL_STD -I. -I$(CPLEXINCDIR)
 MAXHS_CXXFLAGS += -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS 
 MAXHS_CXXFLAGS += -Wall -Wno-parentheses -Wextra -Wno-deprecated
 MAXHS_CXXFLAGS += -std=c++0x
 
-MAXHS_LDFLAGS  = -Wall -lz -L$(CPLEXLIBDIR) -L$(CONCERTLIBDIR) -lilocplex -lcplex -lconcert -lpthread
+MAXHS_LDFLAGS  = -Wall -lz -L$(CPLEXLIBDIR) -lcplex -lpthread
 
 ECHO=@echo
 
@@ -85,10 +81,12 @@ VERB=
 endif
 
 SRCS = $(wildcard minisat/core/*.cc) $(wildcard minisat/utils/*.cc) \
-       $(wildcard maxhs/core/*.cc) $(wildcard maxhs/ifaces/*.cc)
+       $(wildcard maxhs/core/*.cc) $(wildcard maxhs/ifaces/*.cc) \
+       $(wildcard maxhs/utils/*.cc) 
 MINISAT_HDRS = $(wildcard minisat/mtl/*.h) $(wildcard minisat/core/*.h) \
        $(wildcard minisat/utils/*.h) 
-MAXHS_HDRS = $(wildcard maxhs/core/*.h) $(wildcard maxhs/ifaces/*.h)
+MAXHS_HDRS = $(wildcard maxhs/core/*.h) $(wildcard maxhs/ifaces/*.h) \
+       $(wildcard maxhs/ds/*.h) $(wildcard maxhs/utils/*.h) 
 
 OBJS = $(filter-out %Main.o, $(SRCS:.cc=.o))
 
@@ -155,16 +153,17 @@ install-debug:	install-headers install-lib-debug
 install-headers:
 #       Create directories
 	$(INSTALL) -d $(DESTDIR)$(includedir)/maxhs
+	$(INSTALL) -d $(DESTDIR)$(includedir)/minisat
 #
-	for dir in maxhs/core maxhs/ifaces; do \
-  	  $(INSTALL) -d $(DESTDIR)$(includedir)/$$dir ; \
+	for dir in maxhs/core maxhs/ifaces maxhs/ds maxhs/utils; do \
+	  $(INSTALL) -d $(DESTDIR)$(includedir)/$$dir ; \
         done
 	for dir in minisat/mtl minisat/utils minisat/core; do \
-	  $(INSTALL) -d $(DESTDIR)$(includedir)/maxhs/$$dir ; \
+	  $(INSTALL) -d $(DESTDIR)$(includedir)/$$dir ; \
 	done
 # Install headers
 	for h in $(MINISAT_HDRS) ; do \
-	  $(INSTALL) -m 644 $$h $(DESTDIR)$(includedir)/maxhs/$$h ; \
+	  $(INSTALL) -m 644 $$h $(DESTDIR)$(includedir)/$$h ; \
 	done
 	for h in $(MAXHS_HDRS) ; do \
 	  $(INSTALL) -m 644 $$h $(DESTDIR)$(includedir)/$$h ; \
@@ -187,7 +186,7 @@ clean:
 	rm -f $(foreach t, release debug profile, $(foreach o, $(SRCS:.cc=.o), $(BUILD_DIR)/$t/$o)) \
           $(foreach t, release debug profile, $(foreach d, $(SRCS:.cc=.d), $(BUILD_DIR)/$t/$d)) \
 	  $(foreach t, release debug profile, $(BUILD_DIR)/$t/bin/$(MAXHS)) \
- 	  $(foreach t, release debug profile, $(BUILD_DIR)/$t/lib/$(MAXHS_SLIB))
+	  $(foreach t, release debug profile, $(BUILD_DIR)/$t/lib/$(MAXHS_SLIB))
 
 distclean:	clean
 	rm -f config.mk
