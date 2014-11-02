@@ -1,0 +1,109 @@
+MaxHS a fast and robust MaxSat solver.
+
+MaxHS exploits a hybrid approach between SAT and MIPS. The code uses
+minisat v2.2 (http://minisat.se/) as the SAT solver and IBM's CPLEX as
+the MIPS solver.
+
+MaxHS is developed by Jessica Davies and Fahiem Bacchus
+
+Visit "www.maxhs.org" for more information. 
+
+---------------------------------------------------------------------
+
+Building and installing:
+-----------------------
+0) Get CPLEX. 
+-------------
+
+   The code must be linked against the libraries of the CPLEX system
+   from IBM. For faculty and graduate students in academia CPLEX is
+   available at no cost under IBM's academic initiative program:
+
+   http://www-03.ibm.com/ibm/university/academic/pub/page/ban_ilog_programming
+
+   If that link does not function a google search on "IBM Academic
+   Initiative CPLEX" should be able to find the right site.
+
+   You must apply to IBM for their academic initiative program. It
+   takes a few days for them to process your application after which
+   you can access and download CPLEX and other IBM software.
+
+   CPLEX can also be obtained under various commercial licenses.
+
+1) Configure
+------------
+Use "make config VAR=defn" or edit config.mk directly to set the
+following make file variables.
+
+Required variable settings:
+===========================
+
+CPLEXLIBDIR=<path to CPLEX library>
+   #directory that contains libcplex.a for your machine architecture
+
+CPLEXINCDIR=<path to CPLEX headers>
+   #top level include directory. cplex.h should be a file in
+   #one of the subdirectories (probably in "include/ilcplex")
+
+Required if you want to install:
+================================
+
+MaxHS will be built into the "build/[release|debug|profile]/bin"
+sub-directory. The executable is by default statically linked. A linkable
+library is also constructed in "build/[release|debug|profile]/lib.
+
+If instead you want to install these final build products in a more
+globally acccessible location you will need to set the following
+variable:
+
+prefix=<location for install; default = '/usr/local'>
+
+And then execute 
+
+make install
+
+  #"make install" puts the MaxHS executable in $(prefix)/bin, the
+  #MaxHS library in $(prefix)/lib and the MaxHS include headers in
+  #$(prefix)/include
+
+  (will only be able to install into directories that you have
+  write permission on.)
+  
+Optional variable settings:
+==========================
+Various compiler settings can be configured, see the Makefile
+
+Notes:
+
+- The MaxHS make file is a modification of the minisat make file.
+
+- Multiple configuration steps can be joined into one call to "make
+  config" by appending multiple variable assignments on the same line.
+
+- The configuration is stored in the file "config.mk". Look here if
+  you want to know what the current configuration looks like.
+
+- To reset from defaults simply delete the "config.mk" file or call
+  "make distclean".
+
+- Once configured, recompilation can be done as many times as wanted. 
+
+2) Compile and Build 
+-----------
+
+make         --- build a statically linked release version
+make p       --- build a statically linked profiling version
+make install --- build a static release version then install
+
+================================================================================
+Directory Overview:
+
+maxhs/                  MaxHs code
+minisat/mtl/            Minsat  Template Library
+minisat/utils/          Minisat helper code (I/O, Parsing, CPU-time, etc)
+minisat/core/           Minisat core solver (does not do simplification)
+README                  This file
+LICENSE
+
+================================================================================
+
