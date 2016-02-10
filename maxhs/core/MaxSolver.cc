@@ -22,7 +22,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
 
-#include <math.h>
+#include <cmath>
 #include <algorithm>
 #include <map>
 #include <unordered_set>
@@ -34,7 +34,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "maxhs/core/MaxSolver.h"
 #include "maxhs/utils/io.h"
 #include "maxhs/ifaces/miniSatSolver.h"
-#include "maxhs/ifaces/greedySatSolver.h"
+#include "maxhs/ifaces/GreedySolver.h"
+//#include "maxhs/ifaces/greedySatSolver.h"
 #include "minisat/utils/System.h"
 
 //using namespace Minisat;
@@ -44,31 +45,54 @@ using namespace MaxHS_Iface;
 using std::endl;
 using std::cout;
 
-MaxSolver::MaxSolver(Wcnf *f) :
-  bvars {f},
+MaxSolver::MaxSolver(Wcnf *f) : //many of are already default initialized...but for clarity
   theWcnf {f},
+  bvars {f},
   satsolver {new MaxHS_Iface::miniSolver{}},
-  greedysolver {new MaxHS_Iface::GreedySolver{bvars}},
+  greedysolver {nullptr},
+  //  greedySatSolver {nullptr},
   muser {new MaxHS_Iface::Muser{theWcnf, bvars}},
-  cplex {new Cplex{bvars}},
   sat_wt {0.0},
+  forced_wt {0.0},
   lower_bnd {0.0},
-  hards_are_sat { l_Undef},
-  UBmodel(theWcnf->nOrigVars(), l_Undef),
-  
-
-  eqCvar {static_cast<Var>(theWcnf->nOrigVars() + theWcnf->nSofts())},
+  UBmodel (theWcnf->nVars(), l_Undef),
+  UBmodelSofts (theWcnf->nSofts(), l_False),
+  tmpModelSofts (theWcnf->nSofts(), l_False),
+  haveUBModel {false},
+  eqCvar {static_cast<Var>(bvars.maxvar()+1)},
+  eqCvarPos (lit_Undef),
   nextNewVar {eqCvar+1},
-  amountConflictMin (0),
   bLitOccur (bvars.nlits(), 0),
   cplexClauses {},
   sftSatisfied {},
-  solved (false),
-  unsat (false)
+  cplexNU {}, 
+  greedyNU {}, 
+  muserNU {},
+  satNU {},
+  satBvarNU {},
+  forcedWtNU {},
+  amountConflictMin {0},
+  globalStartTime {0},
+  printStatsExecuted {false},
+  solved {false},
+  unsat {false},
+  nFailedLits {0},
+  nForcedByBounds {0},
+  m_sum_reduced_frac {0},
+  mtime {0.0},
+  mcalls {0},
+  doMin {true},
+  blit_lt {&bLitOccur, bvars, false},
+  blit_gt {&bLitOccur, bvars, true}
   { 
     params.instance_file_name = theWcnf->fileName();
+    cplex  = new Cplex {bvars, UBmodelSofts};
     if(!cplex->is_valid())
        cout << "c ERROR. Problem initializing CPLEX solver\n";
+    /*if(theWcnf->getMxs().size() > 0)
+      greedySatSolver = new MaxHS_Iface::GreedySatSolver{bvars};
+      else */
+    greedysolver = new MaxHS_Iface::GreedySolver{bvars};
   }
 
 MaxSolver::~MaxSolver() {
@@ -76,55 +100,125 @@ MaxSolver::~MaxSolver() {
     delete satsolver;
   if (greedysolver)
     delete greedysolver;
+  //if (greedySatSolver)
+  //  delete greedySatSolver;
   if (cplex)
     delete cplex;
 }
 
-void MaxSolver::solve_maxsat() {
-  //1. Compute an initial lower and upper bound by solving
-  //   $F_b^{eq}$ (the reified theory). 
-  addHards(satsolver);
-  addSofts(satsolver, params.bvarDecisions);    
-  addSoftEqs(satsolver, params.fb);  //removable softs if using Fb
-  initSftSatisfied(); 
+bool MaxSolver::doPreprocessing() {
+  //test if we should do preprocessing.
+  //We have to freeze all unit softs. So if this spans all variables we won't
+  //be able to eliminate any variables in preprocessing.
+  if(!params.preprocess)
+    return false;
 
-  lbool val = params.fb ?
-    satsolver->solve(activateSoftEqLit())
-    : satsolver->solve();
-  hards_are_sat = val;
-  if(val == l_False) {
+  const int dne {0}, nfrz {1}; //markers dne==does not exist, nfrz==not frozen. 
+  int toBeFrozen {0}, totalVars {0}; //
+  vector<char> varStatus(theWcnf->nVars(), dne); 
+
+  for(auto hc: theWcnf->hards())
+    for(auto lt: hc) 
+      if(varStatus[var(lt)] == dne) {
+	++totalVars;
+	varStatus[var(lt)] = nfrz;
+      }
+  for(auto sc: theWcnf->softs())
+    if(sc.size() > 1) //unit softs that don't exist elsewhere treated as dne
+      for(auto lt: sc)
+	if(varStatus[var(lt)] == dne) {
+	  ++totalVars;
+	  varStatus[var(lt)] = nfrz;
+	}
+  for(auto sc: theWcnf->softs())
+    if(sc.size() == 1) { //now count units softs that will be frozen. Don't count if they don't exist elsewhere
+      Var v = var(sc[0]);
+      if(varStatus[v] == nfrz) {
+	++toBeFrozen;
+	varStatus[v] = dne;
+      }
+    }
+  if(params.verbosity > 0)
+    cout << "c Total used vars = " << totalVars << " vars to be frozen = " << toBeFrozen << "\n";
+  return toBeFrozen < totalVars;
+}
+
+void MaxSolver::solve() {
+  globalStartTime = cpuTime();
+
+  if(theWcnf->isUnsat()) {
+    cout << "c Unsat Found by theWcnf\n";
     unsatFound();
     return;
   }
-  cout << "c Init Bnds: SAT Time " << satsolver->solveTime() << "\n";
 
+  if(!doPreprocessing()) 
+    satsolver->eliminate(true);
+
+  addHards(satsolver);
+  addSofts(satsolver);
+
+  //add eq clauses if using fbeq.
+  if(params.fbeq)
+    addSoftEqs(satsolver, false); //permanent eq clauses
+
+  //Otherwise we will add forced negated b-vars to the sat solver
+  //after sat solving episodes. Not as powerful as dynamic inferences
+  //made by eq clauses. But better than leaving negated b-vars
+  //uninferred.
+  if(params.fb)
+    initSftSatisfied(); 
+
+  if(params.preprocess) {
+    auto start = cpuTime();
+    satsolver->eliminate(true);
+    if(params.verbosity > 0)
+      cout << "c MiniSat Preprocess eliminated " << satsolver->nEliminated() << " variables. took " << cpuTime()-start << " sec.\n";
+  }
+
+  //* Compute an initial lower and upper bound by solving
+  auto hards_are_sat = satsolver->solve();
+  if(hards_are_sat == l_False) {
+    unsatFound();
+    return;
+  }
+  
   //update Bounds
-  updateLB(getForcedWt()); //get forced weight
+  cout << "c Init Bnds: SAT Time " << satsolver->solveTime() << "\n";
+  improveModel();
+  updateLB(getForcedWt()); //get forced weight. 
   updateUB();
-
-  if(LB() >= UB()) {
+  
+  if(LB() >= UB()) { 
     optFound("c Solved by Init Bnds.");
     return;
   }
+
   cout << "c Init Bnds: LB = " << LB() << " UB = " << UB() << "\n";
-  if (params.verbosity > 0) {
+  if (params.verbosity > 0) 
     cout << "c Init Bnds: Forced " << satsolver->nAssigns() << " literals.\n";
-  }
-  if(params.fb) 
+  //DEBUG 
+  //cout << "Init Bnds: Forced " << satsolver->nAssigns() << " literals.\n"
+  // << satsolver->getForced(0) << "\n";
+  //
+
+  if(params.fb) //add forced negated b-vars to sat solver. Can be useful for seeding and disjoint phase
     satSolverAddBvarsFromSofts();
 
-  //2. Initialize CPLEX and seed constraints. 
-  //cplex->initCplex(bvars.getvars(), theWcnf->softWts());
-  cplexAddNewForcedBvars();
+  //For mutex processing.
+  processMutexes();
 
+  //2. Compute seeding constraints. 
   if (params.seedType != SeedType::none)
     seed_equivalence();
 
+  //DEBUG
+  // if(greedysolver) { 
+  //   greedysolver->printDS();
+  //   cout << " Greedy Solution " << greedysolver->solve() << "\n";
+  // }
+
   //3. Clean up
-
-  if(params.fb)
-    rmSoftEqs(satsolver); 
-
   if (!satsolver->simplify()) 
     printErrorAndExit("c ERROR: UNSAT detected when simplify clauses");
 
@@ -137,6 +231,7 @@ void MaxSolver::solve_maxsat() {
 }
 
 void MaxSolver::disjointPhase() {
+//  Assumps assumps(satsolver, bvars,inMx);
   Assumps assumps(satsolver, bvars);
   int num {0};
   int len {0};
@@ -146,26 +241,39 @@ void MaxSolver::disjointPhase() {
 
   double beginTime = cpuTime();
   assumps.initAllSofts();
+  if(params.sort_assumps == 1) 
+    assumps.sort(blit_gt);
+  else if(params.sort_assumps == 2)
+    assumps.sort(blit_lt);
+
   vector<Lit> conflict;
-  while(satsolve_min(assumps, conflict, params.dsjnt_cpu_per_core, params.dsjnt_mus_cpu_lim)
+  lbool val;
+  while((val = satsolve_min(assumps, conflict, params.dsjnt_cpu_per_core, params.dsjnt_mus_cpu_lim))
 	== l_False) {
 
-    if(params.verbosity > 1)
+    if(params.verbosity > 1) {
       cout << "c Disjoint Conflict size = " << conflict.size() << "\n";
-    if(params.verbosity > 2)
       cout << "c conflict = " << conflict << "\n";
+    }
 
     storeCplexCls(conflict); 
-    assumps.update(conflict, params.fbeq);
+    //assumps.update(conflict, params.fbeq);
+    //Must remove assumptions now that we are adding forced negated bvars
+    assumps.update(conflict, true); 
     num++;
     len += conflict.size();
   }
+
   //update Bounds (only UB could have changed)
-  updateUB();
+  if(val == l_True) {
+    improveModel();
+    updateUB();
+  }
   
   if (params.verbosity > 0) {
     cout << "c Dsjnt: #Cores " << num << "\n";
-    cout << "c Dsjnt: Avg Core Size " <<  len/((double) num) << "\n";
+    if(num > 0)
+      cout << "c Dsjnt: Avg Core Size " <<  len/((double) num) << "\n";
     cout << "c Dsjnt: Time " << cpuTime() - beginTime << "\n";
   }
 }
@@ -173,18 +281,24 @@ void MaxSolver::disjointPhase() {
 void MaxSolver::seqOfSAT_maxsat() {
   vector<Lit> cplexsoln;
   vector<Lit> conflict;
+//  Assumps assumps(satsolver, bvars, inMx);
   Assumps assumps(satsolver, bvars);
   int iteration {0};
 
   while (1) { //exit by return
     //1. Call Cplex
     if (params.verbosity > 0)
-      cout << "c **********Iter: " << iteration << "\n"; 
+      cout << "c **********Iter: " << iteration << " Elapsed Time = "
+	   << cpuTime() - globalStartTime << "\n"; 
     iteration++;
 
-    //Update Cplex
+    //Update Cplex...note all previous satsolves have added the forced bvars to the sat solver
     cplexAddNewForcedBvars();
     cplexAddNewClauses();
+    /*if(params.bestmodel_mipstart) {
+      cplex->clearOldStarts();
+      cplex->addStart(UBModel);
+    }*/
     Weight cplexSolveResult = cplex->solve(cplexsoln);
     if (cplexSolveResult < 0) {
       printErrorAndExit("c ERROR: Cplex::solve() failed");
@@ -192,22 +306,36 @@ void MaxSolver::seqOfSAT_maxsat() {
     reportCplex(cplexSolveResult);
 
     //2. Update and check Bounds
-    updateLB(getWtOfBvars(cplexsoln));
-    if(LB() >= UB()) {
+    bool lbNotImproved = true;
+    auto cplexSolnWt = getWtOfBvars(cplexsoln);
+    //Note that cplex might now model some forced bvars directly---these
+    //will be accounted for when it constructs its returned solution.
+    //so the weight returned is not necessarily the real weight of the solution.
+    if(cplexSolnWt > LB()) {
+      lbNotImproved = false;
+      updateLB(getWtOfBvars(cplexsoln));
+    }
+    if(haveUBModel && LB() >= UB()) { //if !haveUBModel we don't have sat model of hards as yet.
       optFound("c Solved by detecting LB>=UB.");
       return;
     }
     cout << "c Bnds: LB = " << LB() << " UB = " << UB() << "\n";
     
     //3. Set up assumptions.
+    
     assumps.init(cplexsoln, params.coreType);
+    if(params.sort_assumps == 1) 
+      assumps.sort(blit_gt);
+    else if(params.sort_assumps == 2)
+      assumps.sort(blit_lt);
+    
     if(params.verbosity > 3) {
       cout << "cplex solution: " << cplexsoln << "\n";
       cout << "c assumps after Cplex soln: " << assumps.vec() << "\n";
     }
 	
     //4. Check if CPLEX's model yields sat
-    if(satsolve_min(assumps, conflict, params.noTimeLimit, params.mus_cpu_lim) == l_True) {
+    if(satsolve_min(assumps, conflict, params.noLimit, params.mus_cpu_lim) == l_True) {
       updateUB();
       optFound("c Solved by Cplex Model");
       return;
@@ -221,8 +349,19 @@ void MaxSolver::seqOfSAT_maxsat() {
 
       storeCplexCls(conflict);
 
+      //5a. Try populate?
+      if(params.trypop == 2 ||(params.trypop == 1 && lbNotImproved))
+	 tryPopulate(conflict, cplexSolnWt);
+      if(solved)
+	return;
+      
+      //5b. Now iteratively critique conflict arising from last cplex solution 
+      //    processed using non-optimal hitting sets.
       auto tmp = getAssumpUpdates(1, 1, conflict);
-      assumps.update(tmp, params.fbeq);
+      //Must remove assumptions now that we are adding forced negated bvars
+      //assumps.update(tmp, params.fbeq);
+      assumps.update(tmp, true);
+
       if(params.verbosity > 2) {
 	cout << "c FeedCplex Conflict updates: " << tmp << "\n";
 	if(params.verbosity > 3)
@@ -236,9 +375,9 @@ void MaxSolver::seqOfSAT_maxsat() {
   }
 }
 
-void MaxSolver::feedCplex(int gIter, Assumps& assumps,
+int MaxSolver::feedCplex(int gIter, Assumps& assumps,
 			  int nSoFar, size_t sizeSoFar) {
-  //accumulate some conflicts for CPLEX. 
+  //accumulate some conflicts for CPLEX. Return number found.
   //Pre: Assumps is not know to be SAT.
   //     last two parameters are for collecting statistics only.
 
@@ -247,18 +386,17 @@ void MaxSolver::feedCplex(int gIter, Assumps& assumps,
   int nCon {nSoFar};
   int nSinceGreedy {1}; //Count CPLEX as a greedy call
   int64_t totalCnfSize { static_cast<int64_t>(sizeSoFar) };
-/*  const int gsN {4};
-  Weight gsWts[gsN] = {};
-  Weight gsTotalWt {0.0};
-  int gsIndex {0};*/
 
+  double start_time = cpuTime();
   while(1) {
     iter++;
-    if(iter > params.max_before_cplex)
-      return;
+    if(iter > params.max_cores_before_cplex
+       || cpuTime() - start_time > params.max_cpu_before_cplex)
+      return nCon;
 
     lbool val = satsolve_min(assumps, conflict, params.optcores_cpu_per, params.mus_cpu_lim);
     if(val == l_True) {
+      improveModel();
       Weight w = updateUB();
       if(params.verbosity > 0) {
 	cout << "c New SAT solution found, cost = " << w
@@ -267,28 +405,19 @@ void MaxSolver::feedCplex(int gIter, Assumps& assumps,
 
       if(LB() >= UB()) {
 	optFound("c Solved by Sat Solution equal to LB");
-	return;
+	return nCon;
       }
       else if(nSinceGreedy == 0) //greedy solution was solvable. No
-	return;			 //more clauses to feed to cplex
+	return nCon;		 //more clauses to feed to cplex
 
       else { //start with new set of assumptions
 	auto tmp = greedySoln();
-
-	//return for another CPLEX soln. if greedy solutions are not good.
-	/*Weight solWt = getWtOfBvars(tmp);
-	gsTotalWt += solWt - gsWts[gsIndex];
-	gsWts[gsIndex] = solWt;
-	gsIndex = (gsIndex+1) % gsN;
-	if(gsTotalWt/gsN > UB()) {
-	  if(params.verbosity > 0) {
-	  cout << "c Recent Ave Greedy Solution wt is greater than UB,"
-	           " returning to call CPLEX\n";
-	  }
-	  return;
-	}
-	*/
 	assumps.init(tmp, params.coreType);
+	if(params.sort_assumps == 1) 
+	  assumps.sort(blit_gt);
+	else if(params.sort_assumps == 2)
+	  assumps.sort(blit_lt);
+
 	if(params.verbosity > 3) {
 	  cout << "Greedy Solution: " << tmp << "\n";
 	  cout << "Assumps after Greedy Solution" << assumps.vec() << "\n";
@@ -306,10 +435,12 @@ void MaxSolver::feedCplex(int gIter, Assumps& assumps,
 	  || (params.verbosity > 0  && (iter % 50) == 0))
 	cout << "c FeedCplex: " << gIter << "." << iter
 	     << " (#cons = " << nCon << " ave size = "
-	     << totalCnfSize/nCon << ")\n";
+	     << totalCnfSize/nCon << ").\n";
       
       auto tmp = getAssumpUpdates(nCon, nSinceGreedy, conflict);
-      assumps.update(tmp, params.fbeq);
+      //Must remove assumptions now that we are adding forced negated bvars
+      //assumps.update(tmp, params.fbeq);
+      assumps.update(tmp, true);
 
       if(params.verbosity > 2) {
 	cout << "c FeedCplex conflict: " << conflict << "\n";
@@ -321,11 +452,108 @@ void MaxSolver::feedCplex(int gIter, Assumps& assumps,
     else { //timed out
       if(params.verbosity > 0) 
 	cout << "c feedCplex finding new core timedout\n";
-      return;
+      return nCon;
     }
   }
 }
 
+
+//This routine must be called right after an optimal cplex solution is
+//computed.  We know that that solution satisfies all current cores
+//(and non-cores).  A cplex solution is a complete setting of Bvars:
+//i.e., it is a model.  If each of the new solutions in the pool are
+//optimal, then all of them also satisfy all prior cores.
+
+//We can stop any redundant cores from being generated by making sure
+//that every solution we examine satisfies all new conflicts
+//generated.  On entry we have one new conflict C0---the conflict that
+//refuts the original optimal CPLEX solution. So we can discard a
+//solution from the pool S0 if it fails to satisfy C0---C0 will block S0
+//as well.  Otherwise we can refute S0---or if S0 is optimal and
+//satisfiable we can declare S to be a maxsat solution.
+
+//In refuting S0 we obtain another conflict C1. Now for the next
+//solution from the pool S1, we should really check that S1 is not
+//blocked by either C0 or C1. Similary for Sk from the solution pool
+//we should check that it is not blocked by all prior conflicts
+//generated in this routine.
+
+//We preform this test as cplex often generated multiple copies of the
+//same solution in the solution pool.
+
+void MaxSolver::tryPopulate(vector<Lit>& conflict, double cplexOptSolnWt) {
+  //Got conflict for first cplex solution. Try populate and see if we can't
+  //get some more conflicts. Return the last one to initiate greedy feeding
+  //of cplex.
+
+  //Allow for non-optimal solution in solution pool. But
+  //if solution is optimal (equal to the passed optimal solution weight
+  //computed from an optimal solve) we can use it to declare that
+  //a solution has been found.
+  if(params.verbosity > 0)
+    cout << "c Trying populate\n";
+  int nsolns = cplex->populate(params.cplex_pop_cpu_lim);
+  vector<Lit> cplexsoln;
+  vector<vector<Lit>> foundConflicts;
+  vector<Lit> newConflict;
+  vector<Lit> solnMap(bvars.n(), lit_Undef);
+  int nadded = 0;
+  int nOpt = 0;
+  int nOptAdded = 0;
+
+  foundConflicts.push_back(std::move(conflict)); //empties conflict must restore.
+
+  for(int i = 0; i < nsolns; i++) {
+    cplex->getPopulatedSolution(i, cplexsoln);
+    if(cplexsoln.size() == 0) {
+      cout << "c WARNING Cplex populate could not find solution " << i << "\n";
+      continue;
+    }
+    auto solnwt = getWtOfBvars(cplexsoln);
+    bool isOpt = (solnwt == cplexOptSolnWt);
+    if(isOpt)
+      ++nOpt;
+    
+    for(auto l : cplexsoln) 
+      solnMap[bvars.clsIndex(l)] = l;
+    bool isBlocked=false;
+    for(auto con: foundConflicts) {
+      isBlocked = true;
+      for(auto l: con) 
+	if(solnMap[bvars.clsIndex(l)] == l) 
+	  isBlocked = false;
+      if(isBlocked) break;
+    }
+    if(!isBlocked) { //can obtain new conflict from this solution
+      ++nadded;
+      if(isOpt) ++nOptAdded;
+      //Assumps assumps(satsolver, bvars, inMx);
+      Assumps assumps(satsolver, bvars);
+      assumps.init(cplexsoln, params.coreType);
+      if(params.sort_assumps == 1) 
+	assumps.sort(blit_gt);
+      else if(params.sort_assumps == 2)
+	assumps.sort(blit_lt);
+      if(satsolve_min(assumps, newConflict, params.noLimit, params.mus_cpu_lim) == l_True) {
+	updateUB();
+	if(isOpt) {
+	  optFound("c Solved by one of Cplex populated models");
+	  return;
+	}
+	else
+	  cout << "c Non optimal CPLEX populated model was SAT\n";
+      }
+      else {
+	storeCplexCls(newConflict);
+	foundConflicts.push_back(std::move(newConflict));
+      }
+    }
+  }
+  if(params.verbosity>0)
+    cout << "c populate added " << nadded << " conflicts\n";
+  
+  conflict = std::move(foundConflicts[0]);
+}
 
 vector<Lit> MaxSolver::getAssumpUpdates(int nSinceCplex, int nSinceGreedy,
 					vector<Lit>& core) {
@@ -356,14 +584,16 @@ vector<Lit> MaxSolver::fracOfCore(int nSinceCplex, int nSinceGreedy, vector<Lit>
   if(nToReturn == 1) 
     return vector<Lit> { maxOccurring(core) };
 
-  auto maxOccur = [this](Lit l1, Lit l2) { return bLitOccur[bvars.toIndex(l1)] < bLitOccur[bvars.toIndex(l2)]; };
+  //auto maxOccur = [this](Lit l1, Lit l2) { return bLitOccur[bvars.toIndex(l1)] < bLitOccur[bvars.toIndex(l2)]; };
   //use a heap here instead of fully sorting the vector.
-  std::make_heap(core.begin(), core.end(), maxOccur);
+  //std::make_heap(core.begin(), core.end(), maxOccur);
+  std::make_heap(core.begin(), core.end(), blit_lt);
 
   vector<Lit> retVec;
   for (int i = 0; i < nToReturn; i++) {
     retVec.push_back(core.front());
-    std::pop_heap(core.begin(), core.end()-i, maxOccur);
+    //std::pop_heap(core.begin(), core.end()-i, maxOccur);
+    std::pop_heap(core.begin(), core.end()-i, blit_lt);
   }
   if(params.verbosity > 1) 
     cout << "c fracOfCore returns a relaxation of size " << retVec.size() << "\n";
@@ -374,7 +604,9 @@ Lit MaxSolver::maxOccurring(const vector<Lit>& core) {
   //return literal of core that appears in largest number of accumulated CPLEX clauses
   Lit max = core[0];
   for(auto l : core) 
-    if(bLitOccur[bvars.toIndex(l)] > bLitOccur[bvars.toIndex(max)])
+    //if(bLitOccur[bvars.toIndex(l)] > bLitOccur[bvars.toIndex(max)])
+    //
+    if(blit_gt(l, max)) //Note blit_lt(max, l) is not same as blit_gt(l, max)
       max = l;
   return max;
 }
@@ -390,7 +622,7 @@ void MaxSolver::incrBLitOccurrences(const vector<Lit> &core) {
 //      across all solvers (including CPLEX).
 //      Perhaps a solver class that CPLEX and SAT derive from.
 //
-bool MaxSolver::cplexAddCls(const vector<Lit> &cls) {
+bool MaxSolver::cplexAddCls(vector<Lit>&& cls) {
   bool isNonCore = cplex->add_clausal_constraint(cls);
   if(params.verbosity > 2) {
     cout << "c Added clause to Cplex:\n";
@@ -403,25 +635,24 @@ bool MaxSolver::cplexAddCls(const vector<Lit> &cls) {
 //
 void MaxSolver::cplexAddNewForcedBvars() {
   //We pass only forced b-vars to cplex
-  static int notSeen {0};
+
+  cplexNU.update(satsolver);
+  vector<Lit>& forced = cplexNU.forced; 
+
+  /*static int notSeen {0};
   vector<Lit> forced { satsolver->getForced(notSeen) }; //Get unprocessed forced
-  notSeen  += forced.size();
+  notSeen  += forced.size();*/
 
   /*cout << "Cplex Forced units [ ";
   for(auto l : forced) cout << l << "(" << satsolver->curVal(l) << ") ";
   cout << "]\n";*/
-
-
+  
   int nf {0};
-  vector<Lit> unitB(1,lit_Undef);
   for(auto l : forced) 
     if(bvars.isBvar(l)) {
       nf++;
-      unitB[0]=l;
-      cplexAddCls(unitB);
-
-      //cout << "Adding unit to CPLEX " << unitB << " current value " << satsolver->curVal(unitB[0]) << "\n";
-
+      cplexAddCls({l});
+      //cout << "Adding unit to CPLEX " << l << " current value " << satsolver->curVal(l) << "\n";
     }
   if (params.verbosity > 0) {
     if(nf > 0)
@@ -431,25 +662,27 @@ void MaxSolver::cplexAddNewForcedBvars() {
 
 void MaxSolver::greedyAddNewForcedBvars() {
   //We pass only forced b-vars to the greedy solver
-  static int notSeen {0};
+
+  greedyNU.update(satsolver);
+  vector<Lit>& forced = greedyNU.forced; 
+
+  /*static int notSeen {0};
   vector<Lit> forced { satsolver->getForced(notSeen) }; //Get unprocessed forced
-  notSeen  += forced.size();
+  notSeen  += forced.size();*/
 
   /*cout << "Greedy Forced units [ ";
   for(auto l : forced) cout << l << "(" << satsolver->curVal(l) << ") ";
   cout << "]\n";*/
 
   int nf {0};
-  vector<Lit> unitB(1,lit_Undef);
   for(auto l : forced) 
     if(bvars.isBvar(l)) {
       nf++;
-      unitB[0]=l;
-      greedysolver->addClause(unitB);
-
-      //cout << "Adding unit to GREEDY " << unitB << " current value " << satsolver->curVal(unitB[0]) << "\n";
-
-
+      //if(greedysolver)
+      greedysolver->addClause({l});
+      //else
+//	greedySatSolver->addClauseGreedy({l}, false);
+      //cout << "Adding unit to GREEDY " << l << " current value " << satsolver->curVal(l) << "\n";
     }
   if (params.verbosity > 0) {
     if(nf > 0)
@@ -463,24 +696,26 @@ void MaxSolver::muserAddNewForcedVars() {
   //have been forced on its trail e.g., eqCVar. These should not be
   //sent to the muser.
 
-  static int notSeen {0};
+  muserNU.update(satsolver);
+  vector<Lit>& forced = muserNU.forced; 
+
+  /*static int notSeen {0};
   vector<Lit> forced { satsolver->getForced(notSeen) }; //Get unprocessed forced
-  notSeen  += forced.size();
+  notSeen  += forced.size();*/
 
   if(params.verbosity > 2)
     cout << "Adding forced units to MUSER " << forced << "\n";
 
   int nf {0};
-  vector<Lit> unit(1,lit_Undef);
   for(auto l : forced) 
     //Note muser might not know about l, but we inform it of l and its value
     //in case later on the muser has to deal with clauses involving l.
+    //don't add forced control variables
     if((bvars.isBvar(l) || bvars.isOvar(l)) && muser->curVal(l) == l_Undef) {
       nf++;
-      unit[0]=l;
-      if(!muser->addClause(unit)) {
-	cout << "c ERROR: Adding unit to MUSER " << unit << " current value "
-	     << muser->curVal(unit[0]) << " Caused UNSAT\n";
+      if(!muser->addClause({l})) {
+	cout << "c ERROR: Adding unit to MUSER " << l << " current value "
+	     << muser->curVal(l) << " Caused UNSAT\n";
       }
     }
   if (params.verbosity > 0) {
@@ -493,21 +728,24 @@ void MaxSolver::satSolverAddNewForcedVars() {
   //We pass on ordinary variables and b-variables from the muser to the sat solver. 
   //muser control variables are ignored (They shouldn't be any that get through
   //the getForced interface in any event).
-  static int notSeen {0};
+
+  satNU.update(muser);
+  vector<Lit>& forced = satNU.forced; 
+
+  /*static int notSeen {0};
   vector<Lit> forced { muser->getForced(notSeen) }; //Get unprocessed forced
-  notSeen  += forced.size();
+  notSeen  += forced.size();*/
 
   if(params.verbosity > 2)
     cout << "Adding forced units to satsolver " << forced << "\n";
 
   int nf {0};
-  vector<Lit> unit(1,lit_Undef);
   for(auto l : forced) 
+    //don't add control variables
     if((bvars.isBvar(l) || bvars.isOvar(l)) && satsolver->curVal(l) == l_Undef) {
       nf++;
-      unit[0]=l;
-      satsolver->addClause(unit);
-      //cout << "Adding unit to satSolver " << unit << "\n";
+      satsolver->addClause({l});
+      //cout << "Adding unit to satSolver " << l << "\n";
     }
   if (params.verbosity > 0) {
     if(nf > 0)
@@ -519,26 +757,28 @@ void MaxSolver::satSolverAddBvarsFromSofts() {
   //If we are using only the Fb theory, when a soft is satisfied by forced literals
   //the corresponding b-variable will not be set. Use this routine to add these forced 
   //b-variables to the sat solver. (This allows the sat solver to delete these softs
-  //and also to pass the forced b-vars to CPLEX, the muser and the greedy solver
+  //And also to pass the forced b-vars to CPLEX, the muser and the greedy solver
   //perhaps helping them as well.) Note we can only process ordinary variables
   //from the sat solver.
-  static int notSeen {0};
+
+  satBvarNU.update(satsolver);
+  vector<Lit>& forced = satBvarNU.forced; 
+
+  /*static int notSeen {0};
   vector<Lit> forced { satsolver->getForced(notSeen) }; //Get unprocessed forced
-  notSeen += forced.size();
+  notSeen += forced.size();*/
   
   if(params.verbosity > 2)
     cout << "Processing new forced units for adding satisfied softs to satsolver " << forced << "\n";
   
   int nf {0};
-  vector<Lit> unit(1, lit_Undef);
   for(auto l : forced) 
     if(bvars.isOvar(l)) {
       for(auto sftIdx : sftSatisfied[toInt(l)]) {
 	Lit blit = bvars.litOfCls(sftIdx);
 	if(satsolver->curVal(blit) == l_Undef) {
 	  ++nf;
-	  unit[0] = ~blit;
-	  satsolver->addClause(unit);
+	  satsolver->addClause({~blit});
 	  //debug
 	  //cout << "Adding forced negated blit to satsolver " << ~blit << "\n";
 	}
@@ -549,150 +789,205 @@ void MaxSolver::satSolverAddBvarsFromSofts() {
 }
 
 void MaxSolver::cplexAddNewClauses() {
-  if (params.verbosity > 0) 
+  if (params.verbosity > 0) {
     cout << "c CPLEX: += " << cplexClauses.size() << " Clauses.\n";
+  }
   for(size_t i = 0; i < cplexClauses.size(); i++)
     cplexAddCls(cplexClauses.getVec(i));
   cplexClauses.clear();
 }
 
-vector<Lit> MaxSolver::getBvarEqs() {
+/*vector<Lit> MaxSolver::getBvarEqs() {
+  //MODIFY TO USE UNIT SOFTS DIRECTELY AS BVARS.
   //TODO: Consider converting to variable based indexing.
   //returns mapping from original lits to b-lit equivalents 
-  vector<Lit> beqs(theWcnf->nOrigVars()*2, lit_Undef);
+  vector<Lit> beqs(theWcnf->nVars()*2, lit_Undef);
   for (size_t i = 0; i < theWcnf->nSofts(); i++) 
-    if (theWcnf->softs()[i].size() == 1) {
+    if (theWcnf->softSize(i) == 1) {
       Lit unitL = theWcnf->softs()[i][0];
       beqs[toInt(unitL)] = ~bvars.litOfCls(i); //(l,b) => l == -b
       beqs[toInt(~unitL)] = bvars.litOfCls(i); //(l,b) => -l == b
     }
   return beqs;
+  }*/
+
+void MaxSolver::processMutexes() {
+  //each vector in mxs is a set of literals that are a mutex.
+  //These literals will all be bvars, either cores (b1, b2, b3...) or
+  //non cores (-b1, -b2, ...). Insert them in to Cplex and also insert
+  //the definitional clauses for the corresponding d-variables.
+  //(as seed_equivalence might not have added these due to limits on how
+  //many clauses it seeds).
+
+  auto& mxs = theWcnf->getMxs();
+  //auto& mxDvars = theWcnf->getMxDvars();
+
+  for(size_t i=0; i < mxs.size(); i++) {
+    auto mx = mxs[i];     //get copy
+    cplex->add_mutex_constraint(mx);
+    /*
+    auto dvar = mxDvars[i];
+    bool isCore = bvars.isCore(mx[0]);   //to cplex and greedy solvers (here we must also add dvar encoding)
+    cout << "c MaxSolver feeding mx " << mx 
+	 << " Dvar " << dvar+1 << (isCore ? " core" : " noncore") << "\n";
+    //cout << " bin clauses:\n";
+    Lit dlit = isCore ? mkLit(dvar) : ~mkLit(dvar);
+    setInMutex(dlit, inMxdvar);
+    setInMutex(~dlit, inMxdvar);
+    vector<Lit> binCls (2);
+    binCls[1] = dlit;
+    for(auto b : mx) {
+      binCls[0] = ~b;
+      cplex->add_clausal_constraint(binCls);
+      greedySatSolver->addClauseGreedy(binCls, false); //don't use in greedy heuristic
+      if(bvars.isCore(b))
+	setInMutex(~b,inMxbvar);
+      else
+	setInMutex(b,inMxbvar);
+    }
+    //cout << "Mutex = " << mx << "\n";
+    cplex->add_mutex_constraint(mx);
+    greedySatSolver->addMutex(mx, dvar);
+    mx.push_back(~dlit);
+    cplex->add_clausal_constraint(mx);
+    greedySatSolver->addClauseGreedy(mx, false); //don't use in greedy heuristic
+    //cout << "disjunction = " << mx << "\n";*/
+  }
 }
 
 void MaxSolver::seed_equivalence() {
-  //Forced Bvars have already been added to CPLEX.
-  vector<Lit> beqs { getBvarEqs() };
-  vector<Lit> seedingCls;
-  int prev_numConstraints = cplexClauses.size();
-  int nNonCores {0};
-  double nonCoreLength {0};
-  vector<vector<Lit>> cplexConstraints;
+  vector<vector<Lit>> cplexCoreConstraints;
+  vector<vector<Lit>> cplexNonCoreConstraints;
+  vector<vector<Lit>> cplexMixedConstraints;
   bool nonCore;
   bool core;
+  
+  if(params.verbosity > 0)
+    cout << "c Before solving sat solver has " << satsolver->getNClauses(0) << " clauses and " 
+	 << satsolver->getNClauses(1) << " learnts\n";
 
-  for(size_t i = 0; i < theWcnf->nHards(); i++) {
-    seedingCls.clear();
-    nonCore = false;
-    core = false;
-    for(auto l : theWcnf->hards()[i]) {
-      lbool lVal = satsolver->curVal(l);
-      if(lVal == l_False)
-	continue;
-      Lit eqB = beqs[toInt(l)];
-      if (eqB == lit_Undef || lVal == l_True) {
-	seedingCls.clear();
-	break;
+  if(params.prepro_output) {
+    for(int isLearnt=0; isLearnt < (params.seed_learnts ? 2 : 1); isLearnt++) {
+      for(int i =0; i < satsolver->getNClauses(isLearnt); i++) {
+	auto seedingCls = satsolver->getIthClause(i, isLearnt);
+	cout << (isLearnt ? "l#" : "c#") << i << " [ ";
+	for (auto l : seedingCls) {
+	  cout << l;
+	  if(bvars.isBvar(l))
+	    cout << " (B " << bvars.wt(l) << "), ";
+	  else
+	    cout << ", ";
+	}
+	cout << "] (" << seedingCls.size() << ")\n";
       }
-      else {
-	seedingCls.push_back(eqB);
-	if(bvars.isNonCore(eqB)) 
+    }
+  }
+
+  size_t cc {0}, cn {0}, cm{0};
+  for(int isLearnt=0; isLearnt < (params.seed_learnts ? 2 : 1); isLearnt++) {
+    if(isLearnt) {
+      //remember stats for non-learnts
+      cc = cplexCoreConstraints.size();
+      cn = cplexNonCoreConstraints.size();
+      cm = cplexMixedConstraints.size();
+    }
+    for(int i =0; i < satsolver->getNClauses(isLearnt); i++) {
+      auto seedingCls = satsolver->getIthClause(i, isLearnt);
+      nonCore = false;
+      core = false;
+      //cout << (isLearnt ? "l#" : "c#") << i << ". " << seedingCls << "\n";
+      for(auto l : seedingCls) {
+	if (!bvars.isBvar(l)) {
+	  seedingCls.clear(); //not seedable
+	  break;
+	}
+	if(bvars.isNonCore(l)) 
 	  nonCore = true;
 	else
 	  core = true;
-	if(nonCore && params.seedType == SeedType::cores) {
-	  seedingCls.clear();
-	  break;
-	}
+      }
+      /*if(seedingCls.size() > 0)
+	cout << "Seeded " << (core ? " core " : " noncore" ) << "\n";*/
+      
+      if (seedingCls.size() > 0) {
+	if(core && !nonCore) 
+	  cplexCoreConstraints.push_back(seedingCls);
+	else if(!core && nonCore && params.seedType != SeedType::cores) 
+	  cplexNonCoreConstraints.push_back(seedingCls);
+	else if(params.seedType == SeedType::mixed)
+	  cplexMixedConstraints.push_back(seedingCls);
       }
     }
-    if (seedingCls.size() > 0) {
-      cplexConstraints.push_back(seedingCls);
-      if(nonCore) {
-	nNonCores++;
-	nonCoreLength += seedingCls.size();
-      }
-    }
-  }
-  
-  for(size_t i = 0; i < theWcnf->nSofts(); i++) {
-    if (theWcnf->softs()[i].size() == 1 || 
-	satsolver->curVal(bvars.litOfCls(i)) != l_Undef)
-      //unit softs yield tautological constraints.  If the clause is
-      //satisfied its blit is l_false, and there is no constraint.  If
-      //the clause is falsified its blit is l_true and the constraints
-      //is already in cplex's model (via the forced Blit added with
-      //AddNewlyForcedBvars())
-      continue;
-    seedingCls.clear();
-    nonCore = false;
-    core = false;
-    for(auto l : theWcnf->softs()[i]) {
-      lbool lVal = satsolver->curVal(l);
-      if(lVal == l_False)
-	continue;
-      Lit eqB = beqs[toInt(l)];
-      if (eqB == lit_Undef) {
-	seedingCls.clear();
-	break;
-      }
-      else {
-	seedingCls.push_back(eqB);
-	if(bvars.isNonCore(eqB)) 
-	  nonCore=true;
-	else 
-	  core=true;
-	if(nonCore && params.seedType == SeedType::cores) {
-	  seedingCls.clear();
-	  break;
-	}
-      }
-    }
-    if (seedingCls.size() > 0) {
-      seedingCls.push_back(bvars.litOfCls(i)); //soft clauses include their b-lit.
-      cplexConstraints.push_back(seedingCls);
-      if(nonCore) {
-	nNonCores++;
-	nonCoreLength += seedingCls.size();
-      }
-    }
-  }
-  
-  if(cplexConstraints.size() > static_cast<size_t>(params.seed_max))
-    sort(cplexConstraints.begin(), cplexConstraints.end(),
-	 [](const vector<Lit> &v1, const vector<Lit>& v2){return v1.size() < v2.size();}
-	 );
 
-  for(size_t i = 0; i < cplexConstraints.size() && i < static_cast<size_t>(params.seed_max); i++)
-    storeCplexCls(cplexConstraints[i]);
+    if(params.verbosity > 0) {
+      auto lc  = cplexCoreConstraints.size() -  cc;
+      auto ln = cplexNonCoreConstraints.size() - cn;
+      auto lm = cplexMixedConstraints.size() - cm;
+
+      cout << "c found " << cc+cn+cm+lc+ln+lm << " seedable constraints from " << (isLearnt ? " learnts\n" : "clauses\n");
+      cout << "c from clauses " << cc << " cores " << cn << " noncores " << cm << " mixed\n";
+      cout << "c from learnts " << lc << " cores " << ln << " noncores " << lm << " mixed\n";
+    }
+  }
+  
+  //Now add the accumulated seed constraints up to the supplied limit.
+  //prioritize. cores before nonCores before Mixed.
+  //Short constraints before long ones.
+  auto vecSizeLt = [](const vector<Lit> &v1, const vector<Lit>& v2){ return v1.size() < v2.size(); };
+  auto addUpTo = [vecSizeLt, this](vector<vector<Lit> > &c, size_t &lim, size_t &nAdd) { 
+    //add up to lim constraints to cplex. Update lim and number
+    //added, return total length of constraints added
+    double tl {0};
+    if(lim > 0 && c.size() > lim)
+      sort(c.begin(), c.end(), vecSizeLt);
+    size_t i {0};
+    for(i = 0; i < c.size() && i < lim; i++) {
+      tl += c[i].size();
+      storeCplexCls(c[i]);
+    }
+    nAdd = i;
+    lim -= i;
+    return tl;
+  };
+  size_t nCores {0}, nNonCores {0}, nMixed {0};
+  double lCores {0.0}, lNonCores {0.0}, lMixed {0.0};
+
+  size_t limit {static_cast<size_t>(params.seed_max)};
+  lCores = addUpTo(cplexCoreConstraints, limit, nCores);
+  lNonCores = addUpTo(cplexNonCoreConstraints, limit, nNonCores);
+  lMixed = addUpTo(cplexMixedConstraints, limit, nMixed);  
 
   if (params.verbosity > 0) {
-    cout << "c EqSeed: #seed constraints " <<  cplexClauses.size() - prev_numConstraints << "\n";
-    cout << "c EqSeed: #non-cores " <<  nNonCores << "\n";
-    cout << "c EqSeed: Average non-core length " << (nNonCores > 0 ? nonCoreLength/nNonCores : 0) << "\n";
+    cout << "c EqSeed: #seed constraints " <<  nCores + nNonCores + nMixed << "\n";
+    cout << "c EqSeed: cores       " <<  nCores <<  " Ave length " << (nCores > 0 ? lCores/nCores : 0.0) << "\n";
+    cout << "c EqSeed: non-cores   " <<  nNonCores <<  " Ave length " << (nNonCores > 0 ? lNonCores/nNonCores : 0.0) << "\n";
+    cout << "c EqSeed: mixed-cores " <<  nMixed <<  " Ave length " << (nMixed > 0 ? lMixed/nMixed : 0.0) << "\n";
   }
 }
 
 void MaxSolver::printStatsAndExit(int signum, int exitType) {
-  static int onceOnly = 0;
-  if (onceOnly == 0) { 
-    onceOnly = 1;
+  if (!printStatsExecuted) { 
+    printStatsExecuted = true;
     double cpu_time = cpuTime();
     double mem_used = memUsedPeak();
      
     if(signum >= 0) {
       cout << "c INTERRUPTED signal " <<  signum << "\n";
     }
-    if(hards_are_sat == l_Undef)
-      cout << "c No model of hard clauses found\n";
-    else if(!solved) {
+    if(!solved) {
+      cout << "c unsolved\n";
       cout << "c Best LB Found: " << LB() << "\n";
       cout << "c Best UB Found: " << UB() << "\n";
       if(params.printBstSoln) {
-	cout << "c Best Model Found:\n";
-	cout << "c ";
-	for (int i = 0; i < theWcnf->nOrigVars(); i++) 
-	  cout << (UBmodel[i] == l_True ? "" : "-")  << i+1 << " ";
-	cout << "\n";
+	  cout << "c Best Model Found:\n";
+	  if(haveUBModel) {
+	    cout << "c ";
+	    for (int i = 0; i < theWcnf->nVars(); i++) 
+	      cout << (UBmodel[i] == l_True ? "" : "-")  << i+1 << " ";
+	    cout << "\n";
+	  }
+	  else 
+	    cout << "c No Model of hard clauses found\n";
       }
     }
 
@@ -713,8 +1008,13 @@ void MaxSolver::printStatsAndExit(int signum, int exitType) {
 	 << amountConflictMin/(double) cplex->nCnstr()  << "\n";
     cout << "c CPLEX: #calls " << cplex->nSolves() << "\n";
     cout << "c CPLEX: Total time " << cplex->total_time() << "\n";
+//    cout << "c GREEDY: #calls " 
+//	 << (greedysolver ? greedysolver->nSolves() : greedySatSolver->nSolves()) << "\n";;
+//    cout << "c GREEDY: Total time " 
+//	 << (greedysolver ? greedysolver->total_time() : greedySatSolver->total_time()) << "\n";
     cout << "c GREEDY: #calls " << greedysolver->nSolves() << "\n";;
     cout << "c GREEDY: Total time " << greedysolver->total_time() << "\n";
+
     cout << "c MEM MB: " << mem_used << "\n";
     cout << "c CPU: " << cpu_time << "\n";
   }
@@ -741,7 +1041,7 @@ void MaxSolver::reportSAT_min(lbool result, double iTime, size_t orig_size, int 
   }
 }
 
-void MaxSolver::reportForced(vector<Lit> &forced, Weight wt) {
+void MaxSolver::reportForced(const vector<Lit> &forced, Weight wt) {
   if (params.verbosity > 0 && forced.size() > 0) {
     cout << "c Forced Soft Clauses (#" << forced.size() << ", wt = " << wt << "\n";
     if (params.verbosity > 2) 
@@ -775,19 +1075,16 @@ lbool MaxSolver::satsolve_min(const Assumps& inAssumps, vector<Lit>& outConflict
 void MaxSolver::minimize_muser(vector<Lit> &con, double mus_cpu_lim) {
   /* Muser tries to remove lits from end of con first.
      Sort so that better lits to remove are later in the vector.
-  */
-  static int64_t mreduced {0};
-  static int mcalls {0};
-  static double mtime {0.0};
-  static auto minConf = [this](Lit l1, Lit l2) {
+*/
+
+  /*static auto minConf = [this](Lit l1, Lit l2) {
     int sc1 = bLitOccur[bvars.toIndex(l1)]+1;
     int sc2 = bLitOccur[bvars.toIndex(l2)]+1;
     if(bvars.wt(l1) == 0 && bvars.wt(l2) == 0)
       return sc1 < sc2;
     else
       return bvars.wt(l1)/sc1 > bvars.wt(l2)/sc2;
-  };
-  static bool doMin {true};
+  };*/
 
   muserAddNewForcedVars();
   if(!doMin)
@@ -796,12 +1093,10 @@ void MaxSolver::minimize_muser(vector<Lit> &con, double mus_cpu_lim) {
   size_t reduction {0};
   size_t osize {0};
 
-//  if(mcalls < 64 || params.mus_lits_per_sec <= 0 ||
-//     mreduced*1.0/mtime > params.mus_lits_per_sec) 
-    
   if(doMin) {
     osize = con.size();
-    std::sort(con.begin(), con.end(), minConf);
+    //std::sort(con.begin(), con.end(), minConf);
+    std::sort(con.begin(), con.end(), blit_lt);
     if(mus_cpu_lim > 0)
       muser->musBudget(con, mus_cpu_lim);
     else
@@ -814,21 +1109,25 @@ void MaxSolver::minimize_muser(vector<Lit> &con, double mus_cpu_lim) {
     reduction = osize - con.size();
   }
 
-  mtime += muser->solveTime();
-  ++mcalls;
-  mreduced += reduction;
+  if(osize > 1) {
+    mtime += muser->solveTime();
+    ++mcalls;
+    m_sum_reduced_frac += static_cast<double>(reduction)/static_cast<double>(osize);
+  }
   
-  doMin = params.mus_lits_per_sec <= 0
-    || (mtime < 50.0) //give muser some time to allow rate computation to be more accurate
-    || mreduced*1.0/mtime > params.mus_lits_per_sec;
+  doMin = params.mus_min_red <= 0
+    //|| (mtime < 124.0) //give muser some time to allow rate computation to be more accurate
+    //|| mcalls < 64
+    || (mtime < 64.0) //give muser some time to allow rate computation to be more accurate
+    || (m_sum_reduced_frac/mcalls) > params.mus_min_red;
 
   if(params.verbosity > 1)
-    cout << "c doMin = " << doMin << " mcalls = " << mcalls
-	 << " reduction rate = " << mreduced*1.0/mtime << "\n";
+    cout << "c doMin = " << doMin << " mtime = " << mtime
+	 << " average reduction = " << m_sum_reduced_frac/mcalls << "\n";
 }
 
 void MaxSolver::check_mus(vector<Lit> &con) {
-  //Test to see if it is a con is a MUS
+  //Test to see if con is a MUS (DEBUGGING)
   size_t orig_size = con.size();
   vector<Lit> assumps;
   vector<Lit> critical;
@@ -900,10 +1199,10 @@ void MaxSolver::check_mus(vector<Lit> &con) {
 void MaxSolver::outputConflict(const vector<Lit> &con) {
   cout << "conflict clause (" << con.size() << "): ";
   for (size_t i = 0; i < con.size(); i++) {
-    satsolver->printLit(con[i]); printf(" ");
+    satsolver->printLit(con[i]);
+    cout << " ";
   }
-  printf("\n");
-  fflush(stdout);
+  cout << "\n";
 }
 
 //Currently not used. But if we call satsolver->pruneLearnts 
@@ -942,13 +1241,30 @@ void MaxSolver::unsatFound() {
 
 void MaxSolver::optFound(std::string reason) {
   cout << reason << "\n";
-  printf("o %.0lf\n", UB());
-  printf("s OPTIMUM FOUND\n");
-  printSolution(UBmodel);  
-  cout << "c Final LB: " << LB() << "\n";
-  cout << "c Final UB: " << UB() << "\n";
+  Weight solCost = UB() + theWcnf->baseCost();
+  Weight intPart;
+  auto p = cout.precision();
+  if(modf(solCost, &intPart) > 0)
+    cout << "o " << solCost << "\n";
+  else
+    cout << "o " << std::fixed << std::setprecision(0) << solCost << "\n";
+  cout.precision(p);
+  cout.unsetf(std::ios::fixed);
+  cout << "s OPTIMUM FOUND\n";
   solved = true;
+  theWcnf->rewriteModelToInput(UBmodel);
+
+  for(size_t i=0; i < UBmodel.size(); i++)
+    if(UBmodel[i] == l_Undef)
+      UBmodel[i] = l_True; //set unset vars to arbitary value (true)
+
+  printSolution(UBmodel);  
   fflush(stdout);
+  int nfalseSofts;
+  if(theWcnf->checkModelFinal(UBmodel, nfalseSofts) != UB() + theWcnf->baseCost()) //we cannot use wcnf after this!
+    cout << "c ERRROR incorrect model reported" << endl;
+  else
+      cout << "c Solved: Number of falsified softs = " << nfalseSofts << "\n";
 }
   
 
@@ -972,18 +1288,36 @@ void MaxSolver::printErrorAndExit(const char *msg) {
 void MaxSolver::printSolution(const vector<lbool>& model) {
   // For the Evaluation. Prints the "v " line, which contains the last
   // satisfying assignment found by the SAT solver (only original
-  // literals, no b-vars). Note that model might be incomplete.  with
-  // l_Undef for some variables. Print these as an arbitrary value (in
-  // the code below they are printed as false)
+  // literals, no b-vars). 
+  // Typically model is filled in before calling, but if model is
+  // incomplete (contains l_Undef) these vars will be printed as false
+  // in the code below.
   if(!params.printSoln)
     return;
   
-  printf("v");
-  for (int i = 0; i < theWcnf->nOrigVars(); i++) {
-    printf(" %s%d", model[i] == l_True ? "" : "-", i+1);
+  cout << "v";
+  for (size_t i = 0; i < model.size(); i++) {
+    cout << " " << (model[i] == l_True ? "" : "-") << i+1;
   }
-  printf("\n");
-  fflush(stdout);
+  cout << endl;
+}
+
+void MaxSolver::configBvar(Var bvar, SatSolver* slv) {
+  //Configure any blits after they have been added to the sat solver
+  //Should be passed literal appearing in soft clause (i.e.,
+  //blit=false ==> enforce clause)
+  if(params.preprocess)
+    slv->freezeVar(bvar);
+
+  if(!params.bvarDecisions && !bvars.isOvar(bvar))
+    //keep unit b-vars (ordinary vars as decisions)
+    slv->setDecisionVar(bvar, false);
+
+  //setPolarity determines if sign should be true!  So if bvar appears
+  //positively in clause, we want to set its default sign to true
+  //(making it false and activating the clause by defaults)
+
+  slv->setPolarity(bvar, bvars.isPos(bvar) ? l_True : l_False);
 }
 
 void MaxSolver::addHards(SatSolver* slv) {
@@ -992,8 +1326,12 @@ void MaxSolver::addHards(SatSolver* slv) {
       cout << "c Adding hard clauses caused unsat.\n";
       return;
     }
+    for(auto lt : theWcnf->hards()[i])
+      if(bvars.isBvar(lt))
+	configBvar(var(lt), slv);
   }
 }
+
 
 void MaxSolver::addHards(SatSolver* slv, const vector<int>& indicies) {
   for(auto i : indicies) {
@@ -1001,80 +1339,96 @@ void MaxSolver::addHards(SatSolver* slv, const vector<int>& indicies) {
       cout << "c Adding hard clauses caused unsat.\n";
       return;
     }
+    for(auto lt : theWcnf->hards()[i]) 
+      if(bvars.isBvar(lt))
+	configBvar(var(lt), slv);
   }
 }
 
-void MaxSolver::addSofts(SatSolver* slv, bool b_var_d) {
+void MaxSolver::addSofts(SatSolver* slv) {
   for (size_t i = 0; i < theWcnf->nSofts(); i++) {
     Lit blit = bvars.litOfCls(i);
-    //set polarity to make soft clause active, i.e., falsify blit
-    slv->newControlVar(bvars.varOfCls(i), b_var_d, 
-			     sign(blit) ? l_True : l_False);
-    vector<Lit> sftCls {theWcnf->getSoft(i)};
-    sftCls.push_back(blit);
-    if(!slv->addClause(sftCls)) {
-      cout << "c ERROR: soft clause " << i << " caused solver UNSAT state!\n";
-      printCurClause(sftCls);
-      return;
+
+    /*cout << "Soft clause " << i << " " << theWcnf->getSoft(i) << "\n"
+      << "blit = " << blit << "\n";*/
+
+    if(theWcnf->softSize(i) > 1) {
+      //Only non-unit softs get added to solver (units are handled in the assumptions)
+      vector<Lit> sftCls {theWcnf->getSoft(i)};
+      sftCls.push_back(blit);
+      if(!slv->addClause(sftCls)) {
+	cout << "c ERROR: soft clause " << i << " caused solver UNSAT state!\n";
+	printCurClause(sftCls);
+	return;
+      }
+      for(auto lt : sftCls) 
+	if(bvars.isBvar(lt))
+	  configBvar(var(lt), slv);
     }
   }
 }
 
-void MaxSolver::addSofts(SatSolver* slv, bool b_var_d,
-			 const vector<int> & indicies) {
+void MaxSolver::addSofts(SatSolver* slv, const vector<int>& indicies) {
   for (auto i : indicies) {
     Lit blit = bvars.litOfCls(i);
-    slv->newControlVar(bvars.varOfCls(i), b_var_d,
-		       sign(blit) ? l_True : l_False);
-    vector<Lit> sftCls {theWcnf->getSoft(i)};
-    sftCls.push_back(blit);
-    if(!slv->addClause(sftCls)) {
-      cout << "c ERROR: soft clause " << i << " caused solver UNSAT state!\n";
-      printCurClause(sftCls);
-      return;
+    if(theWcnf->softSize(i) > 1) {
+      //Only non-unit softs get added to solver (units are handled in the assumptions)
+      vector<Lit> sftCls {theWcnf->getSoft(i)};
+      sftCls.push_back(blit);
+      if(!slv->addClause(sftCls)) {
+	cout << "c ERROR: soft clause " << i << " caused solver UNSAT state!\n";
+	printCurClause(sftCls);
+	return;
+      }
+      for(auto lt : sftCls) 
+	if(bvars.isBvar(lt))
+	  configBvar(var(lt), slv);
     }
   }
 }
 
 void MaxSolver::addSoftEqs(SatSolver* slv, bool removable) {
   //add eqs to solver. Optionally make them removable
-  if(removable) {
-    slv->newControlVar(eqCvar, false); //not a decision variable
-  }
-  Lit eqCvarPos = mkLit(eqCvar, false); 
-
+  //Note all softs processed here should have already been added
+  //to the solver to config their b-vars.
   vector<Lit> eqcls(removable ? 3 : 2, lit_Undef);
-  for (size_t i = 0; i < theWcnf->nSofts(); i++) {
-    Lit bneg = ~bvars.litOfCls(i);
-    for(auto l: theWcnf->softs()[i]) {
-      eqcls[0] = ~l; eqcls[1] = bneg; 
-      if(removable) eqcls[2] = eqCvarPos;
-      //note addClause modifies eqcls
-      if(!slv->addClause(eqcls)) {
-	cout << "c ERROR: equality clause (" << eqcls[0] << " " 
-	     << eqcls[1];
-	if(removable) 
-	  cout << " " << eqcls[2];
-	cout << ") causes solver UNSAT state!\n";
-	return;
+  for (size_t i = 0; i < theWcnf->nSofts(); i++) 
+    if(theWcnf->softSize(i) > 1) {
+      if(removable && eqCvarPos == lit_Undef) {
+	slv->newControlVar(eqCvar, false); //not a decision variable
+	eqCvarPos = mkLit(eqCvar, false);
+      }
+      Lit bneg = ~bvars.litOfCls(i);
+      for(auto l: theWcnf->softs()[i]) {
+	eqcls[0] = ~l; eqcls[1] = bneg; 
+	if(removable) eqcls[2] = eqCvarPos;
+	//note addClause modifies eqcls
+	if(!slv->addClause(eqcls)) {
+	  cout << "c ERROR: equality clause (" << eqcls[0] << " " 
+	       << eqcls[1];
+	  if(removable) 
+	    cout << " " << eqcls[2];
+	  cout << ") causes solver UNSAT state!\n";
+	  return;
+	}
       }
     }
-  }
 }
 
 void MaxSolver::addSoftEqs(SatSolver* slv, bool removable,
 			   const vector<int>& indicies) {
-  //TODO simplify if can always use fbeq.
-  if(removable) {
-    slv->newControlVar(eqCvar, false); //not a decision variable
-   }
-  Lit eqCvarPos = mkLit(eqCvar, false); 
-  
+  //Note all softs processed here should have already been added
+  //to the solver to config their b-vars.
   vector<Lit> eqcls(removable ? 3 : 2, lit_Undef);
-  for (auto i : indicies) {
-    Lit bneg = ~bvars.litOfCls(i);
-    for(auto l: theWcnf->softs()[i]) {
-      eqcls[0] = ~l; eqcls[1] = bneg; 
+  for (auto i : indicies) 
+    if(theWcnf->softSize(i) > 1) {
+      if(removable && eqCvarPos == lit_Undef) {
+	slv->newControlVar(eqCvar, false); //not a decision variable
+	eqCvarPos = mkLit(eqCvar, false);
+      }
+      Lit bneg = ~bvars.litOfCls(i);
+      for(auto l: theWcnf->softs()[i]) {
+	eqcls[0] = ~l; eqcls[1] = bneg; 
       if(removable) eqcls[2] = eqCvarPos;
       //note addClause modifies eqcls
       if(!slv->addClause(eqcls)) {
@@ -1090,7 +1444,7 @@ void MaxSolver::addSoftEqs(SatSolver* slv, bool removable,
 }
 
 void MaxSolver::initSftSatisfied() {
-  vector<vector<int>> satByLit(theWcnf->nOrigVars()*2, {});
+  vector<vector<int>> satByLit(theWcnf->nVars()*2, vector<int>{});
   for(size_t i = 0; i < theWcnf->nSofts(); i++) 
     for(auto lt: theWcnf->softs()[i]) 
       satByLit[toInt(lt)].push_back(i);
@@ -1104,30 +1458,83 @@ void MaxSolver::initSftSatisfied() {
 }
 
 
-
-
 void MaxSolver::setNoBvarDecisions() {
   for (size_t i = 0; i < theWcnf->nSofts(); i++) {
     Var b = bvars.varOfCls(i);
-    satsolver->setNoDecision(b);
+    if(!bvars.isOvar(b)) //don't change ordinary b-vars (from units)?
+      satsolver->setDecisionVar(b, false);
+  }
+}
+
+void MaxSolver::improveModel() {
+  //Sat solver has found a model. Try to improve the cost of that model by computing a muc.
+  if(!params.improve_model)
+    return;
+
+  vector<Lit> assumps;
+  vector<Lit> branchLits;
+  Weight prevWt {0};
+  if(params.verbosity  > 1) {
+    cout << "c Improving Model\n";
+    //cout << "totalClsWt() = " << theWcnf->totalClsWt() << " getSatClsWt() = " << getSatClsWt() << "\n";
+    prevWt = theWcnf->totalClsWt() - getSatClsWt();
+    cout << "c Current Model weight = " << prevWt << "\n";
+  }
+
+  for(size_t i = 0; i < bvars.n(); i++) {
+    /*cout << "soft clause #" << i << " litofCls = " << bvars.litOfCls(i) 
+      << " model value = " << satsolver->modelValue(bvars.litOfCls(i)) << "\n";*/
+    if(satsolver->curVal(bvars.litOfCls(i)) == l_Undef) { //only try to change un-forced b's
+      auto tval = satsolver->modelValue(bvars.litOfCls(i));
+      if(tval == l_True)
+	branchLits.push_back(~bvars.litOfCls(i)); //try to negate these bvars
+      else 
+	assumps.push_back(~bvars.litOfCls(i)); //these bvars must remain false
+    }
+  }
+
+  if(params.verbosity > 1) {
+    cout << "c assumptions size = " << assumps.size() << " branchlits size = " << branchLits.size() << "\n";
+    /*cout << "Assumps = " << assumps << "\n";
+      cout << "branchlits = " << branchLits << "\n";*/
+  }
+
+  if(params.improve_model_max_size > 0 && static_cast<int>(branchLits.size()) > params.improve_model_max_size)
+    return;
+
+  auto val = satsolver->relaxSolve(assumps, branchLits, params.improve_model_cpu_lim);
+
+  if(params.verbosity > 1) {
+    cout << "c Relaxation search yielded " << val << "\n";
+    Weight newWt = theWcnf->totalClsWt() - getSatClsWt();
+    cout << "c Old wt = " << prevWt << " new wt = " << newWt << " improvement = " << prevWt - newWt << "\n";
   }
 }
 
 Weight MaxSolver::updateUB() { 
   //return weight of new model...update UB if it is a better model.
   Weight w = getSatClsWt();
-  if (w > sat_wt) {
+  if (!haveUBModel || w > sat_wt) {
     sat_wt = w;
+    if(params.verbosity > 0) {
+      cout << "c New UB found " << UB() << "\n";
+      cout << "c Elapsed time " << cpuTime() - globalStartTime << "\n";
+    }
     setUBModel();
+    if(params.find_forced)
+      findForced();
   }
-  return theWcnf->totalWt() - w;
+  return theWcnf->totalClsWt() - w;
 }
 
 void MaxSolver::setUBModel() {
   //copy sat solvers model to UBmodel; Note sat solver's model might
   //be incomplete resulting in l_Undef as the value of some variables
-  for(int i = 0; i < theWcnf->nOrigVars(); i++)
-     UBmodel[i] = satsolver->modelValue( static_cast<Var>(i) );
+  haveUBModel = true;
+  for(int i = 0; i < theWcnf->nVars(); i++)
+    UBmodel[i] = satsolver->modelValue(i);
+  for(size_t i = 0; i < theWcnf->nSofts(); i++)
+    UBmodelSofts[i] = tmpModelSofts[i];
 }
 
 Weight MaxSolver::getSatClsWt() {
@@ -1143,8 +1550,12 @@ Weight MaxSolver::getSatClsWt() {
 	is_sat = true;
 	break;
       }
-    if(is_sat) 
+    if(is_sat) {
       w += theWcnf->getWt(i);
+      tmpModelSofts[i] = l_True;
+    }
+    else
+      tmpModelSofts[i] = l_False;
     /*else {
       cout << i << "-th soft falsified bvar = "
 	   << bvars.litOfCls(i) << " value = " 
@@ -1156,19 +1567,27 @@ Weight MaxSolver::getSatClsWt() {
       cout << "]\n";
       }*/
   }
-  //cout << "Computed wt = " << w << " total wt = " << theWcnf->totalWt() << "\n";
+  //cout << "Computed wt = " << w << " total wt = " << theWcnf->totalClsWt() << "\n";
   return w;
 }
 
-Weight MaxSolver::getForcedWt(int trail_index) {
-  //return weight of b-vars forced at trail_index and below
-  vector<Lit> forced { satsolver->getForced(trail_index) };
-  Weight w {0};
+Weight MaxSolver::getForcedWt() {
+  //return weight of forced b-vars. Note that
+  //this works with both fb and fbeq. In fb the solver could set some
+  //b-vars arbitrarily. But it can't force them to be true.
+
+  forcedWtNU.update(satsolver);
+  vector<Lit>& forced = forcedWtNU.forced;
+
+  /*static int notSeen {0};
+  vector<Lit> forced { satsolver->getForced(notSeen) };
+  notSeen += forced.size();*/
+
   for(auto l : forced) {
     if(bvars.isBvar(l)) 
-      w += bvars.wt(l);
+      forced_wt += bvars.wt(l); //If l is negated b-var its wt is zero.
   }
-  return w;
+  return forced_wt;
 }
 
 Weight MaxSolver::getWtOfBvars(const vector<Lit>& blits) {
@@ -1183,47 +1602,50 @@ Weight MaxSolver::getWtOfBvars(const vector<Lit>& blits) {
 void MaxSolver::storeCplexCls(const vector<Lit>& cls) {
   //clauses of size 1 are forced in sat solver and will
   //be added by AddNewForcedBvars;
-  if(cls.size() > 1) {
-    cplexClauses.addVec(cls);
-    incrBLitOccurrences(cls);
-    if(!params.greedy_cores_only)
-      greedysolver->addClause(cls);
-    else {
-      bool core {true};
-      for(auto lt : cls) 
-	if(bvars.isNonCore(lt)) {
-	  core = false;
-	  break;
-	}
-      if(core)
-	greedysolver->addClause(cls);
+  if(cls.size() <= 1) 
+    return;
+  cplexClauses.addVec(cls);
+  incrBLitOccurrences(cls);
+  bool core {true};
+  for(auto lt : cls) 
+    if(bvars.isNonCore(lt)) {
+      core = false;
+      break;
     }
-
-    //Try this
-    //satsolver->addClause(cls);
+  if(core) {
+    //if(greedysolver)
+    greedysolver->addClause(cls);
+    //else
+    // greedySatSolver->addClauseGreedy(cls, true); //use in greedy heuristic
   }
+  //Try this
+  //satsolver->addClause(cls);
 }
 
 vector<Lit> MaxSolver::greedySoln() {
-  //return a greedy solution to the clauses fed to CPLEX including those about to be fed
+  //return a greedy solution of the clauses fed (and pending) to CPLEX
   if(params.verbosity > 0) {
     cout << "c Computing Greedy Solution\n";
   }
-  greedyAddNewForcedBvars();
-  auto val = greedysolver->solve(); 
-  if(val == l_False) 
-    cout << "c ERROR. CPLEX clauses have no solution (or greedy solver couldn't find one)\n";
   vector<Lit> soln;
-  for(size_t i = 0; i < theWcnf->nSofts(); i++) {
-    Var v = bvars.varOfCls(i);
-    lbool val = greedysolver->modelValue(v);
-    if(val == l_True) 
-      soln.push_back(mkLit(v, false));
-    else if(val == l_False)
-      soln.push_back(mkLit(v, true));
-    else if(val == l_Undef)
-      soln.push_back(~bvars.litOfCls(i)); //harden clause if no value assigned
-  }
+  greedyAddNewForcedBvars();
+  //if(greedysolver)
+  soln = greedysolver->solve();
+  /*else {
+    auto val = greedySatSolver->solve(); 
+    if(val == l_False) 
+      cout << "c ERROR. CPLEX clauses have no solution (or greedy solver couldn't find one)\n";
+    for(size_t i = 0; i < bvars.n(); i++) {
+      Var v = bvars.varOfCls(i);
+      lbool val = greedySatSolver->modelValue(v);
+      if(val == l_True) 
+	soln.push_back(mkLit(v, false));
+      else if(val == l_False)
+	soln.push_back(mkLit(v, true));
+      else if(val == l_Undef)
+	soln.push_back(~bvars.litOfCls(i)); //harden clause if no value assigned
+    }
+  }*/
   if(params.verbosity > 0) {
     cout << "c Greedy: soln cost = " << getWtOfBvars(soln) << "\n";
   }
@@ -1236,3 +1658,114 @@ bool MaxSolver::isCore(const vector<Lit>& core) {
       return(false);
   return true;
 }
+
+void MaxSolver::findForced() {
+  //Check if new UB allows any variables to be forced.
+  //Try ordinary variables if there are few enough of them
+  //else try only b-vars. Does not account for future forced lits changing the implication wt.
+  auto nf = nFailedLits;
+  auto nb = nForcedByBounds;
+  for(size_t i = 0; i < satsolver->nVars(); i++) {
+    if(!satsolver->activeVar(i))
+      continue;
+    for(int sign = 0; sign < 2; sign++) {
+      Lit l = mkLit(i, sign);
+
+      /*cout << " Active Lit " << l;
+      cout << (impWtIsUnk(l) ? " Unknown Wt " : 
+	       (impWtIsUB(l) ? " Upperbound " : " Exact "));
+      if(!impWtIsUnk(l) && !impWtIsUB(l) && !impWtIsExact(l))
+	cout << " ERROR weight type not set properly\n";
+      else if(!impWtIsUnk(l))
+      cout << " weight = " << getImpWt(l) << "\n";*/
+
+      if(impWtIsUnk(l)) { //not computed. Compute now
+	if(findImpWt(l))
+	  break; //was forced
+      }
+      else if(impWtIsUB(l)) {
+	if(getImpWt(l) > UB()) {
+	  //potentially forced. Refine now
+	  if(findImpWt(l))
+	    break;
+	}
+      }
+      else {//is exact
+	assert(impWtIsExact(l));
+	if(getImpWt(l) > UB()) {
+	  satsolver->addClause({~l});
+	  ++nForcedByBounds;
+	  break;
+	}
+      }
+    }
+  }
+  if(params.verbosity>0)
+    cout << "c findForced found " << nFailedLits-nf << " failed lits and "
+	 << nForcedByBounds-nb << " lits forced by bounding\n";
+}
+
+bool MaxSolver::findImpWt(Lit l) {
+  vector<Lit> imps;
+  //compute implied weight of l by UP. Return true if l was forced
+  if(!satsolver->findImplications(l, imps)) {
+    satsolver->addClause({~l});
+    ++nFailedLits;
+    return true;
+  }
+  auto wt = getWtOfBvars(imps);
+  if(wt > UB()) {
+    satsolver->addClause({~l});
+    ++nForcedByBounds;
+    return true;
+  }
+  setImpWt(l, wt, impWtExact);
+  for(auto x : imps) 
+    if(impWtIsUnk(x) || (impWtIsUB(x) && wt < getImpWt(x))) 
+      setImpWt(x, wt, impWtUB);
+  return false;
+}
+
+bool MaxSolver::BLitOrderLt::operator() (const Lit l1, const Lit l2) const {
+  //must be strict weak order:
+  
+  int oc1 = (*occurCount)[bvars.toIndex(l1)];
+  int oc2 = (*occurCount)[bvars.toIndex(l2)];
+  double wt1 = bvars.wt(l1);
+  double wt2 = bvars.wt(l2);
+  bool retval {0};
+  
+  if(wt1 == 0 && oc1 > 0) {   //l1 is super---satisfies cores at zero cost
+    if(wt2 == 0 && oc2 > 0)  //so is l2
+      if(oc1 == oc2) 
+	retval = (l1 < l2); //order lits the same for gt and lt 
+    //when discriminators are equal
+      else
+	retval = (oc1 < oc2) ^ gt; //XOR: we know that oc1 !=
+    //oc2. So if (oc1 < oc2) == 0,
+    //then l1 > l2.
+    else //l2 is not super
+      retval = gt; //l1 > l2
+  }
+  else if(wt2 == 0 && oc2 > 0) //l1 is not super but l2 is
+    retval = !gt; //l1 < l2
+  else {
+    //Neither is super compute merit
+    double m1 {0.0};
+    double m2 {0.0};
+    
+    //note since lits not super wt == 0 ==> oc == 0; no division by 0
+    m1 = (oc1==0) ? -wt1 : oc1/wt1; 
+    m2 = (oc2==0) ? -wt2 : oc2/wt2;
+    
+    if(m1 == m2) {
+      if(bvars.clsSize(l1) == bvars.clsSize(l2))
+	retval =  (l1 < l2);
+      else
+	retval = (bvars.clsSize(l1) < bvars.clsSize(l2)) ^ gt;
+    }
+    else
+      retval = (m1 < m2) ^ gt;
+  }
+  return retval;
+}  

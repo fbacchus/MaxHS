@@ -18,8 +18,21 @@ all: r lr
 
 ## Cplex library location (configure these variables with "make config")
 
-CPLEXLIBDIR   ?= /pkgs/ilog/cplex125/cplex/lib/x86-64_sles10_4.1/static_pic
-CPLEXINCDIR   ?= /pkgs/ilog/cplex125/cplex/include
+ifeq "$(shell uname)" "Linux"
+#cplex-12.6.1 (has a bug June 1 2015)
+#CPLEXLIBDIR   = /w/63/fbacchus/CPlex/cplex/lib/x86-64_linux/static_pic
+#CPLEXINCDIR   = /w/63/fbacchus/CPlex/cplex/include
+#cplex-12.5.1 (slower but no bugs detected)
+#CPLEXLIBDIR   = /pkgs/ilog/cplex125/cplex/lib/x86-64_sles10_4.1/static_pic
+#CPLEXINCDIR   = /pkgs/ilog/cplex125/cplex/include
+CPLEXLIBDIR   = /w/63/fbacchus/CPLEX_Studio1263/cplex/lib/x86-64_linux/static_pic
+CPLEXINCDIR   = /w/63/fbacchus/CPLEX_Studio1263/cplex/include
+endif
+
+ifeq "$(shell uname)" "Darwin"
+CPLEXLIBDIR   = /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio1251/cplex/lib/x86-64_osx/static_pic/
+CPLEXINCDIR   = /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio1251/cplex/include
+endif
 
 # Directory to store object files, libraries, executables, and dependencies:
 BUILD_DIR      ?= build
@@ -80,11 +93,11 @@ else
 VERB=
 endif
 
-SRCS = $(wildcard minisat/core/*.cc) $(wildcard minisat/utils/*.cc) \
+SRCS = $(wildcard minisat/core/*.cc) $(wildcard minisat/simp/*.cc) $(wildcard minisat/utils/*.cc) \
        $(wildcard maxhs/core/*.cc) $(wildcard maxhs/ifaces/*.cc) \
        $(wildcard maxhs/utils/*.cc) 
 MINISAT_HDRS = $(wildcard minisat/mtl/*.h) $(wildcard minisat/core/*.h) \
-       $(wildcard minisat/utils/*.h) 
+       $(wildcard minisat/utils/*.h) $(wildcard minisat/simp/*.h) 
 MAXHS_HDRS = $(wildcard maxhs/core/*.h) $(wildcard maxhs/ifaces/*.h) \
        $(wildcard maxhs/ds/*.h) $(wildcard maxhs/utils/*.h) 
 
@@ -106,7 +119,10 @@ $(BUILD_DIR)/profile/%.o:			MAXHS_CXXFLAGS +=$(MAXHS_PRF) -pg
 
 ## Build-type Link-flags:
 $(BUILD_DIR)/profile/bin/$(MAXHS):		MAXHS_LDFLAGS += -pg
-$(BUILD_DIR)/release/bin/$(MAXHS):		MAXHS_LDFLAGS += --static -z muldefs $(MAXHS_RELSYM)
+ifeq "$(shell uname)" "Linux"
+$(BUILD_DIR)/release/bin/$(MAXHS):		MAXHS_LDFLAGS += --static -z muldefs
+endif
+$(BUILD_DIR)/release/bin/$(MAXHS):		MAXHS_LDFLAGS += $(MAXHS_RELSYM)
 
 ## Executable dependencies
 $(BUILD_DIR)/release/bin/$(MAXHS):	 	$(BUILD_DIR)/release/maxhs/core/Main.o $(BUILD_DIR)/release/lib/$(MAXHS_SLIB)
@@ -158,7 +174,7 @@ install-headers:
 	for dir in maxhs/core maxhs/ifaces maxhs/ds maxhs/utils; do \
 	  $(INSTALL) -d $(DESTDIR)$(includedir)/$$dir ; \
         done
-	for dir in minisat/mtl minisat/utils minisat/core; do \
+	for dir in minisat/mtl minisat/utils minisat/core minisat/simp; do \
 	  $(INSTALL) -d $(DESTDIR)$(includedir)/$$dir ; \
 	done
 # Install headers

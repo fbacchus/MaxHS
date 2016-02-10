@@ -241,10 +241,10 @@ protected:
     void     insertVarOrder   (Var x);                                                 // Insert a variable in the decision order priority queue.
     virtual Lit      pickBranchLit    ();                                                      // Return the next decision variable.
     void     newDecisionLevel ();                                                      // Begins a new decision level.
-    void     uncheckedEnqueue (Lit p, CRef from = CRef_Undef);                         // Enqueue a literal. Assumes value of literal is undefined.
+    virtual void     uncheckedEnqueue (Lit p, CRef from = CRef_Undef);                         // Enqueue a literal. Assumes value of literal is undefined.
     bool     enqueue          (Lit p, CRef from = CRef_Undef);                         // Test if fact 'p' contradicts current state, enqueue otherwise.
     CRef     propagate        ();                                                      // Perform unit propagation. Returns possibly conflicting clause.
-    void     cancelUntil      (int level);                                             // Backtrack until a certain level.
+    virtual void     cancelUntil      (int level);                                             // Backtrack until a certain level.
     void     analyze          (CRef confl, vec<Lit>& out_learnt, int& out_btlevel);    // (bt = backtrack)
     virtual void     analyzeFinal     (Lit p, LSet& out_conflict);                             // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
     bool     litRedundant     (Lit p);                                                 // (helper method for 'analyze()')

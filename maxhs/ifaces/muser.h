@@ -35,7 +35,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <ostream>
 #include <string>
-#include "minisat/core/Solver.h"
+#include "minisat/simp/SimpSolver.h"
 #include "minisat/core/SolverTypes.h"
 #include "maxhs/core/Wcnf.h"
 #include "maxhs/core/Bvars.h"
@@ -54,9 +54,9 @@ using std::vector;
 
 namespace MaxHS_Iface {
 
-class Muser : protected Minisat::Solver {
+class Muser : protected Minisat::SimpSolver {
 public:
-  Muser(const Wcnf* f, Bvars b);
+  Muser(const Wcnf* f, Bvars& b);
   virtual ~Muser() {}
   
   bool musBudget(vector<Lit>& conflict, int64_t propBudget) {
@@ -84,26 +84,33 @@ public:
   
   bool musBudget(vector<Lit>& conflict, double timeLimit)  {
     int64_t propBudget, props;
-    props = getProps();
+    props = getProps(); //returns total number of props done by solver
+    bool didTrial {false};
+
     if(props > 0 && totalTime > 0)
       propBudget = props/totalTime * timeLimit;
-    else
-      propBudget = 1024*128;
-    
+    else {
+      propBudget = 1024*1024*10;
+      didTrial = true;
+    }
+
     stime = cpuTime();
     prevTotalTime = totalTime; 
     auto val = mus_(conflict, propBudget);
     solves++;
     if(val) 
       succ_solves++;
-    if(props == 0 && !val) {
-      auto moreProps = int64_t(getProps()/totalTime*timeLimit - propBudget);
-      if (moreProps > propBudget*.5) {
-	//try again 
-	val =  mus_(conflict, moreProps);
-	solves++;
-	if(val) 
-	  succ_solves++;
+    else {
+      double solvetime1 = cpuTime() - stime;
+      if(didTrial && !val && solvetime1 < timeLimit*.60) {
+	auto moreProps = int64_t((getProps()-props)/solvetime1 * timeLimit - propBudget);
+	if (moreProps > propBudget*0.5) {
+	  //try again 
+	  val =  mus_(conflict, moreProps);
+	  solves++;
+	  if(val) 
+	    succ_solves++;
+	}
       }
     }
     totalTime += cpuTime() - stime;
@@ -143,7 +150,10 @@ public:
   
  protected:
   const Wcnf* theWcnf;
-  Bvars bvars;
+  Bvars& bvars;
+
+  vector<Lit> forced;
+
   //Stats. 
   double timer, totalTime, prevTotalTime, stime;
   double m_timer, m_stime, m_prevTotalTime, m_totalTime;
@@ -173,6 +183,7 @@ public:
   Lit ex2in(Lit lt) const;
 
   //computation routines
+  bool doPreprocessing() const;
   bool inSolver(Lit lt) const;
   bool inSolver(Var v) const;
   bool mus_(vector<Lit>& conflict, int64_t propBudget);
@@ -180,11 +191,13 @@ public:
   void ensureSoftCls(Lit lt);
   uint64_t getProps() const { return propagations; }
   vector<Lit> addAmoUnk(vector<Lit>& unknowns);
-  bool addMoreCrits(vector<Lit>& conflict);
+  void addMoreCrits(vector<Lit>& conflict, int64_t propBudget);
   void preProcessConflict(vector<Lit>& conflict);
   void analyzeFinal(Lit p, Minisat::LSet& out_conflict);
-  
-  }; //Class Muser
+  void setPropBudget(bool haveBudget, int64_t propBudget) {
+    propagation_budget = haveBudget ? propBudget + propagations : -1;
+  }
+}; //Class Muser
   
 } //namesspace
 #endif 

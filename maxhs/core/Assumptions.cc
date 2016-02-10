@@ -33,7 +33,7 @@ using Minisat::lit_Undef;
 void Assumps::init(const vector<Lit>& ivals, CoreType coreType) {
   //initialize assumptions with set of literals.  If only looking for
   //cores, add only noncore vars (conflict will be negation == core)
-  assert(ivals.size() <= bvars.n());
+  assert(ivals.size() <= static_cast<size_t>(bvars.n()));
   //Perhaps sort assumps?
   assumps.clear();
 
@@ -43,6 +43,7 @@ void Assumps::init(const vector<Lit>& ivals, CoreType coreType) {
       //Don't need true lits in assumption.
       switch(coreType) {
       case CoreType::cores:
+//	if(bvars.isNonCore(l) && !bVarInMx(l))
 	if(bvars.isNonCore(l))
 	  assumps.push_back(l);
 	break;
@@ -64,7 +65,8 @@ void Assumps::init(const vector<Lit>& ivals, CoreType coreType) {
 void Assumps::initAllSofts() {
   //harden all softs not yet forced.
   assumps.clear();
-  for(int i = 0; i < bvars.n(); i++)
+  for(size_t i = 0; i < bvars.n(); i++)
+//    if(satsolver->curVal(bvars.varOfCls(i)) == l_Undef && !dVar(~bvars.litOfCls(i)))
     if(satsolver->curVal(bvars.varOfCls(i)) == l_Undef)
       assumps.push_back(~bvars.litOfCls(i));
   setMap();

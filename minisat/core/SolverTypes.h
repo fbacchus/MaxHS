@@ -114,6 +114,11 @@ public:
         uint8_t v   = (0xFCFCF400 >> sel) & 3;
         return lbool(v); }
 
+//FB added---clunky syntax to avoid confusingly applying ~ to an lbool instead of a lit!
+    lbool neg() const {
+      return value&2 ? lbool(value) : ( value ? lbool((uint8_t)0) : lbool((uint8_t)1) );
+    }
+
     friend int   toInt  (lbool l);
     friend lbool toLbool(int   v);
 };

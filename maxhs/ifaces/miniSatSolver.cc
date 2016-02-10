@@ -35,6 +35,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 using namespace MaxHS_Iface;
 using namespace Minisat;
 
+miniSolver::miniSolver() :
+  relaxOrder_heap (RelaxVarOrderLt(relaxVarRank)),
+  doingRelaxSearch {false}
+{}
+
+miniSolver::~miniSolver() {}
+
 
 /*************************************************/
 //Internal to external variable ordering mappings.
@@ -59,16 +66,16 @@ void miniSolver::ensure_mapping(const Var ex)
 //Solver interface routines
 
 bool miniSolver::status() const {
-  return Minisat::Solver::okay();
+  return Minisat::SimpSolver::okay();
 }
 
 lbool miniSolver::solve_(const vector<Lit>& assumps, vector<Lit>& conflict,
 			 int64_t confBudget, int64_t propBudget) {
   conflict.clear();
-  Minisat::Solver::assumptions.clear();
+  Minisat::SimpSolver::assumptions.clear();
   for(auto lt : assumps) {
     ensure_mapping(lt);
-    Minisat::Solver::assumptions.push(ex2in(lt));
+    Minisat::SimpSolver::assumptions.push(ex2in(lt));
   }
   if(confBudget < 0)
     conflict_budget = -1;
@@ -80,30 +87,112 @@ lbool miniSolver::solve_(const vector<Lit>& assumps, vector<Lit>& conflict,
   else
     propagation_budget = propagations + propBudget;
 
-  lbool val = Minisat::Solver::solve_();
-  in2ex(Minisat::Solver::conflict.toVec(), conflict);
+  lbool val = Minisat::SimpSolver::solve_(false); //don't do simplification incrementally. 
+  in2ex(Minisat::SimpSolver::conflict.toVec(), conflict);
   return val;
 }
 
-bool miniSolver::simplify()
-{
-  return Minisat::Solver::simplify();
+lbool miniSolver::relaxSolve_(const vector<Lit>& assumps, const vector<Lit>& branchLits, 
+			      int64_t propBudget) {
+  Minisat::SimpSolver::assumptions.clear();
+  for(auto lt : assumps) {
+    ensure_mapping(lt);
+    Minisat::SimpSolver::assumptions.push(ex2in(lt));
+  }
+
+  relaxVarRank.clear();
+  relaxOrder_heap.clear();
+  for(int i = 0; i < static_cast<int>(branchLits.size()); i++) {
+    auto lt = branchLits[i];
+    ensure_mapping(lt);
+    auto inLt = ex2in(lt);
+    //If var is not a relax var, then either !relaxVarRank.has() or relaxVarRank = max()
+    relaxVarRank.insert(var(inLt), i, std::numeric_limits<int>::max());
+    relaxVarSign.insert(var(inLt), sign(inLt));
+    //note all elements already in heap are already in relaxVarRank,
+    //so new element can be inserted in correct place.
+    relaxOrder_heap.insert(var(inLt)); 
+  }
+
+  if(propBudget < 0)
+    propagation_budget = -1;
+  else
+    propagation_budget = propagations + propBudget;
+
+  savedModel.clear();
+  for(int i = 0; i < Minisat::SimpSolver::model.size(); i++)
+    savedModel.push_back(Minisat::SimpSolver::model[i]);
+
+  doingRelaxSearch = true;
+  auto val = Minisat::SimpSolver::solve_(false);
+  doingRelaxSearch = false;
+
+  if(val != l_True) {
+    Minisat::SimpSolver::model.clear();
+    Minisat::SimpSolver::model.growTo(savedModel.size());
+    for(int i = 0; i < static_cast<int>(savedModel.size()); i++)
+      Minisat::SimpSolver::model[i] = savedModel[i];
+  }
+  return val;
 }
 
-void miniSolver::cancelTrail(int level, vector<Lit>& bt_lits)
-{
-  if (decisionLevel() > level){
-    bt_lits.clear();
+
+Lit miniSolver::pickBranchLit() {
+  if(!doingRelaxSearch)
+    return Minisat::SimpSolver::pickBranchLit();
+  Var next = var_Undef;
+  while(next == var_Undef || value(next) != l_Undef)
+    if(relaxOrder_heap.empty()) {
+      next = var_Undef;
+      break;
+    }
+    else
+      next = relaxOrder_heap.removeMin();
+
+  if(next == var_Undef)
+    return Minisat::SimpSolver::pickBranchLit();
+  else
+    return mkLit(next, relaxVarSign[next]);
+}
+
+void miniSolver::cancelUntil(int level) {
+  if (decisionLevel() > level) {
     for (int c = trail.size()-1; c >= trail_lim[level]; c--) {
-      bt_lits.push_back(trail[c]); 
       Var      x  = var(trail[c]);
       assigns [x] = l_Undef;
+      if (phase_saving > 1 || (phase_saving == 1 && c > trail_lim.last()))
+	polarity[x] = sign(trail[c]);
+      if(doingRelaxSearch && isRelaxVar(x))
+	insertRelaxOrder(x);
+      insertVarOrder(x); //also insert into var order rank to restore for next non-relax search.
     }
     qhead = trail_lim[level];
     trail.shrink(trail.size() - trail_lim[level]);
     trail_lim.shrink(trail_lim.size() - level);
-  } 
+  }
 }
+
+void miniSolver::freezeVar(Var v)
+{
+  Var in = ex2in(v);
+  if (in != var_Undef) {
+    //if(!frozen[in]) cout << "mini freezevar " << in << " external " << v << "\n";
+    Minisat::SimpSolver::freezeVar(in);
+  }
+  else 
+    cout << "c ERROR. Tried to freeze variable " << v << " that is not yet in solver\n.";
+}
+
+bool miniSolver::eliminate(bool turn_off_elim) 
+{
+  return Minisat::SimpSolver::eliminate(turn_off_elim);
+}
+
+bool miniSolver::simplify()
+{
+  return Minisat::SimpSolver::simplify();
+}
+
 
 void miniSolver::analyzeFinal(Lit p, LSet& out_conflict)
 {
@@ -118,6 +207,26 @@ void miniSolver::analyzeFinal(Lit p, LSet& out_conflict)
   
   seen[var(p)] = 1;
 
+  /*cout << "In analyzerFinal\n DLevel = " << decisionLevel() << "\n";
+  cout << "False assumption = ";
+  printLit(in2ex(p));
+  cout << "\nTRAIL:\n";
+  for(int i = trail.size()-1; i >= 0; i--) {
+    cout << i << "." << level(var(trail[i])) << "\t";
+    printLit(in2ex(trail[i]));
+    if(reason(var(trail[i])) == CRef_Undef) 
+      cout << "\tDecision\n";
+    else {
+      printf("\t<--[");
+      Clause &c = ca[reason(var(trail[i]))];
+      for(int j = 0; j < c.size()-1; j++) {
+	printLit(in2ex(c[j])); cout << ", ";
+      }
+      printLit(in2ex(c[c.size()-1])); cout << "]\n";
+    }
+  }
+  */
+  
   LSet assumps;
   for(int i = 0; i < assumptions.size(); i++) {
     assumps.insert(assumptions[i]);
@@ -140,8 +249,15 @@ void miniSolver::analyzeFinal(Lit p, LSet& out_conflict)
       seen[x] = 0;
     }
   }
-  
   seen[var(p)] = 0;
+
+  /*printf("Final Conflict: [");
+  auto& v = out_conflict.toVec();
+  for(int j = 0; j < v.size()-1; j++) {
+    printLit(in2ex(v[j])); cout << ", ";
+  }
+  printLit(in2ex(v[v.size()-1])); cout << "]\n";
+  */
 }
 
 bool miniSolver::findImplications(const vector<Lit> &assumps, vector<Lit>& imps)
@@ -154,7 +270,7 @@ bool miniSolver::findImplications(const vector<Lit> &assumps, vector<Lit>& imps)
   imps.clear();
 
   vec<Lit> r;
-  bool val = Minisat::Solver::implies(a, r);
+  bool val = Minisat::SimpSolver::implies(a, r);
   if(!val) return val;
 
   for(int i=0; i < r.size(); i++)
@@ -163,8 +279,14 @@ bool miniSolver::findImplications(const vector<Lit> &assumps, vector<Lit>& imps)
 }
 
 vector<Lit> miniSolver::getForced(int index) {
-  static vector<Lit> forced {};
+  //DEBUG
+  //cout << "miniSolver::getForced: Forced =" << forced << "\n";
+
   updateForced(forced);
+
+  //DEBUG
+  //cout << "after update forced =" << forced << "\n";
+
   vector<Lit> tmp;
   for(size_t i = index; i < forced.size(); i++)
     tmp.push_back(in2ex(forced[i]));
@@ -172,33 +294,24 @@ vector<Lit> miniSolver::getForced(int index) {
 }
 
 void miniSolver::updateForced(vector<Lit>& frc) {
-  int limit = Solver::trail_lim.size() > 0 ?
-    Solver::trail_lim[0] : Solver::trail.size();
+  int limit = trail_lim.size() > 0 ?
+    trail_lim[0] : trail.size();
   int i {0};
 
+  //DEBUG
+  /*cout << "MINISolver update Forced. TRAIL = \n[";
+  for(int jj = 0; jj < limit; jj++)
+    cout << "[" << jj << ". " << Solver::trail[jj] << "/" << in2ex(Solver::trail[jj]) << "] ";
+    cout << "]\n";*/
+  
   if(frc.size() > 0) {
     i = frc.size() - 1;
-    while(i < limit && Solver::trail[i++] != frc.back());
+    while(i < limit && trail[i++] != frc.back());
   }
 
   for( ; i < limit; i++)
-    if(in2ex(Solver::trail[i]) != lit_Undef)
-      frc.push_back(Solver::trail[i]);
-}
-
-int miniSolver::nAssigns() const
-{
-  return Minisat::Solver::nAssigns();
-}
-
-int miniSolver::nClauses() const
-{
-  return Minisat::Solver::nClauses();
-}
-
-int miniSolver::nVars() const
-{
-  return Minisat::Solver::nVars();
+    if(in2ex(trail[i]) != lit_Undef)
+      frc.push_back(trail[i]);
 }
 
 bool miniSolver::reduceClause(vector<Lit>& lts) const
@@ -231,12 +344,34 @@ bool miniSolver::addClause(const vector<Lit>& lts)
   vec<Lit> ps;
   for(auto lt: lts) {
     ensure_mapping(lt);
+    if(isEliminated(var(ex2in(lt)))) {
+      ps.clear();
+      break;
+    }
     ps.push(ex2in(lt));
   }
 
+  //DEBUG
   //cout << "mini addCls: ext=" << lts << " int=" << ps << "\n";
 
-  return Minisat::Solver::addClause_(ps); 
+  if(ps.size()>0)
+    return Minisat::SimpSolver::addClause_(ps); 
+  else
+    return true;
+}
+
+void miniSolver::setPolarity(Var v, lbool pol) {
+  Var in = ex2in(v);
+  assert(in != var_Undef);
+  if(in != var_Undef) 
+    Minisat::SimpSolver::setPolarity(in, pol);
+}
+
+void miniSolver::setDecisionVar(Var v, bool dvar) {
+  Var in = ex2in(v);
+  assert(in != var_Undef);
+  if(in != var_Undef) 
+    Minisat::SimpSolver::setDecisionVar(in, dvar);
 }
 
 void miniSolver::newControlVar(Var b, bool dvar, lbool pol) {
@@ -256,19 +391,11 @@ void miniSolver::newControlVar(Var b, bool dvar, lbool pol) {
 
 void miniSolver::freeVar(Lit l) {
   //remove mapping and assert l to sat solver.
-  Var in = var(l) < (int) ex2in_map.size()  ? ex2in_map[var(l)] : var_Undef;
+  Var in = ex2in(var(l));
   if(in != var_Undef) {
     ex2in_map[var(l)] = var_Undef;
     in2ex_map[in] = var_Undef;
     releaseVar(mkLit(in, sign(l)));
-  }
-}
-
-void miniSolver::setNoDecision(Var b) {
-  //unset b as a decision variable;
-  Var in = b < (int) ex2in_map.size() ? ex2in_map[b] : var_Undef;
-  if(in != var_Undef) {
-    setDecisionVar(in, false);
   }
 }
 
@@ -285,7 +412,7 @@ void miniSolver::printLit(const Lit l) const
 void miniSolver::invertVarActivities() 
 {
   double minAct = -1; // min non-zero activity
-  for (int i = 0; i < nVars(); i++) {
+  for (size_t i = 0; i < nVars(); i++) {
     if (activity[i] > 0 && (minAct < 0 || activity[i] < minAct)) {
       minAct = activity[i];
     }
@@ -293,7 +420,7 @@ void miniSolver::invertVarActivities()
   // If no variables have any activity, then there is no need to invert
   if (minAct < 0) return;
   
-  for (int i = 0; i < nVars(); i++) {
+  for (size_t i = 0; i < nVars(); i++) {
     if (activity[i] > 0) {
       activity[i] = (1/activity[i])/(1/minAct);
     } else {
@@ -305,7 +432,7 @@ void miniSolver::invertVarActivities()
 
 
 void miniSolver::pruneLearnts(MaxHS::MaxSolver *S) 
-//TODO: use a function pointer or allow a lambda to be passed
+//TODO: Not used right now but inefficient and not flexible
 {
   int i, j;
   vector<Lit> exCls;
@@ -330,7 +457,7 @@ lbool miniSolver::modelValue(const Lit p) const
   if (in == lit_Undef)
     return l_Undef;
   else
-    return Minisat::Solver::modelValue(in);
+    return Minisat::SimpSolver::modelValue(in);
 }
 
 lbool miniSolver::modelValue(const Var x) const 
@@ -339,22 +466,48 @@ lbool miniSolver::modelValue(const Var x) const
   if (in == var_Undef)
     return l_Undef;
   else
-    return Minisat::Solver::modelValue(in);
+    return Minisat::SimpSolver::modelValue(in);
 }
 
-lbool miniSolver::curVal(Var x) const {
+lbool miniSolver::curVal(const Var x) const {
   Var in = ex2in(x);
   if(in == var_Undef)
     return l_Undef;
   else  
-    return Minisat::Solver::value(in);
+    return Minisat::SimpSolver::value(in);
 }
 
-lbool miniSolver::curVal(Lit x) const {
+lbool miniSolver::curVal(const Lit x) const {
   Lit in = ex2in(x);
   if(in == lit_Undef)
     return l_Undef;
   else  
-    return Minisat::Solver::value(in);
+    return Minisat::SimpSolver::value(in);
+}
+
+vector<Lit> miniSolver::getIth_clauses(int ith) const {
+  vector<Lit> cl {};
+  if(ith >= clauses.size() || isRemoved(clauses[ith]))
+    return cl;
+  auto &c = ca[clauses[ith]];
+  if(satisfied(c))
+    return cl;
+  for(int i=0; i< c.size(); i++)
+    if(value(c[i]) != l_False)
+      cl.push_back(in2ex(c[i]));
+  return cl;
+}
+
+vector<Lit> miniSolver::getIth_learnts(int ith) const {
+  vector<Lit> cl {};
+  if(ith >= learnts.size() || isRemoved(learnts[ith]))
+    return cl;
+  auto &c = ca[learnts[ith]];
+  if(satisfied(c))
+    return cl;
+  for(int i=0; i< c.size(); i++)
+    if(value(c[i]) != l_False)
+      cl.push_back(in2ex(c[i]));
+  return cl;
 }
 

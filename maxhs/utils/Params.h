@@ -36,14 +36,15 @@ public:
   void readOptions();
   int verbosity;
   int mverbosity;
-  const double noTimeLimit;
+  const double noLimit;
   int min_type;
   double mus_cpu_lim;
-  double mus_lits_per_sec;
+  double mus_min_red;
   bool dsjnt_phase;
   double dsjnt_cpu_per_core;
   double dsjnt_mus_cpu_lim;
   double optcores_cpu_per;
+
   bool fbeq;
   bool fb;
   bool printBstSoln;
@@ -54,23 +55,43 @@ public:
 
   SeedType seedType;
   int seed_max;
+  bool seed_learnts;
   bool bvarDecisions;
   double frac_to_relax;
   int frac_rampup_start;
   int frac_rampup_end;
-  int max_before_cplex;
-  
+  int max_cores_before_cplex;
+  int max_cpu_before_cplex;
+
+  int sort_assumps;
+  bool bestmodel_mipstart;
   bool nonopt_rand;
   bool nonopt_maxoccur;
   bool nonopt_frac;
 
-  bool greedy_cores_only;
+  double improve_model_cpu_lim;
+  int improve_model_max_size;
+  bool improve_model;
+  bool find_forced;
 
-  int mip_threads;
-  bool mip_data_chk;
-  bool mip_write_model;
-  bool mip_output;
+  int cplex_threads;
+  bool cplex_data_chk;
+  bool cplex_write_model;
+  bool cplex_output;
 
+  int cplex_pop_nsoln;
+  double cplex_pop_cpu_lim;
+
+  //double trypop_cplextime_ub;
+  //double trypop_feedtime_lb;
+  int trypop;
+  
+  bool prepro_output;
+  bool preprocess;
+  bool wcnf_eqs;
+  bool wcnf_units;
+  bool wcnf_mx_bvars;
+  double wcnf_mx_cpu_lim;
   std::string instance_file_name;
 };
 

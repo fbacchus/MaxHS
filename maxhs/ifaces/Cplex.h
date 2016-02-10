@@ -39,7 +39,7 @@ using std::vector;
 namespace MaxHS_Iface {
   class Cplex {
   public:
-    Cplex(Bvars b);
+    Cplex(Bvars& b, vector<lbool>& ubModelSofts);
     ~Cplex();
 
     Weight solveBudget(vector<Lit>& solution, double timeLimit) {
@@ -54,13 +54,19 @@ namespace MaxHS_Iface {
       numSolves++;
       return val; 
     }
-    
     Weight solve(vector<Lit>& solution) {
       return solveBudget(solution, -1);
     }
 
+    //try to populate cplex solutions using a time limit...don't return 
+    //them return the number of solutions.
+    int populate(double timeLimit);
+    int populate() { return populate(-1); }
+    void getPopulatedSolution(int, vector<Lit>&);
+
     bool is_valid() { return solver_valid; }
-    bool add_clausal_constraint(const vector<Lit>& con);
+    bool add_clausal_constraint(vector<Lit>& con);
+    bool add_mutex_constraint(vector<Lit>& con);
     //void add_impl_constraint(Lit blit, const vector<Lit>& con);
 
     //stats
@@ -78,14 +84,16 @@ namespace MaxHS_Iface {
     int nSolves() { return numSolves; }
 
   protected:
-    Bvars bvars;
+    Bvars& bvars;
+    vector<lbool>& ubModelSofts;
     CPXENVptr env;
     CPXLPptr mip;
     bool solver_valid;
 
-    //Hold the Cplex variables---indexed by ints.
-    //IloBoolVarArray bool_variables;
-    //IloObjective cplex_obj;
+    //forced units (in external ordering)
+    vector<lbool> exUnits;
+    void setExUnits(Lit l);
+    lbool getExUnits(Lit l);
 
     void processError(int status, bool terminal, const char *msg);
     void addNewVar(Var ex);
@@ -98,6 +106,8 @@ namespace MaxHS_Iface {
 
     Weight getSolution(vector<Lit> &solution); 
     Weight solve_(vector<Lit>& solution, double timeLimit);
+
+
 
     //External to Internal Mapping
     vector<Var>in2ex_map;

@@ -45,6 +45,7 @@
 #include "minisat/core/SolverTypes.h"
 #include "minisat/core/Solver.h"
 #include "minisat/utils/System.h"
+#include "maxhs/utils/io.h"
 
 using Minisat::Lit;
 using Minisat::lbool;
@@ -55,6 +56,7 @@ using Minisat::l_False;
 using Minisat::cpuTime;
 
 using std::vector;
+using std::cout;
 
 namespace MaxHS {
   class MaxSolver;
@@ -89,22 +91,30 @@ namespace MaxHS_Iface {
     }
     
     lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict, double timeLimit)  {
+      //minisat's runtime is not very predictable. So if no complex solves have been done before
+      //odds are the time taken will far from the timeLimit. 
+      //The accuracy of the timeLimit gets better as more solves are executed.
       int64_t propBudget, props;
-      props = getProps();
-      if(props > 0 && totalTime > 0)
+      props = getProps(); //returns total number of props done by solver
+      bool didTrial {false};
+
+      if(solves > 0 && props > 0) {
         propBudget = props/totalTime * timeLimit;
-      else
-        propBudget = 1024*128;
-      
+      }
+      else {
+        propBudget = 1024*1024*10;
+	didTrial = true;
+      }
       stime = cpuTime();
       prevTotalTime = totalTime; 
       lbool val = solve_(assumps, conflict, -1, propBudget);
       solves++;
-      if(props == 0 && val == l_Undef) {
-	auto moreProps = int64_t(getProps()/totalTime*timeLimit - propBudget);
-	if (moreProps > propBudget*.5) 
-	  //try again 
+      double solvetime1 = cpuTime() - stime;
+      if(didTrial && val == l_Undef && solvetime1 < timeLimit*.60) {
+	auto moreProps = int64_t((getProps()-props)/solvetime1 * timeLimit - propBudget);
+	if (moreProps > propBudget*0.5) {
 	  val =  solve_(assumps, conflict, -1, moreProps);
+	}
         solves++;
       }
       totalTime += cpuTime() - stime;
@@ -113,17 +123,49 @@ namespace MaxHS_Iface {
     }
     
     lbool solve(const vector<Lit>& assumps, vector<Lit>& conflict)
-    { return  solveBudget(assumps, conflict, -1, -1); }
+      { return  solveBudget(assumps, conflict, -1, -1); }
     
     lbool solve()
-    { vector<Lit> tc; return solve(vector<Lit>{}, tc); }
+      { vector<Lit> tc; return solve(vector<Lit>{}, tc); }
+
+    lbool solveBudget(double timeLimit)
+      { vector<Lit> tc; return solveBudget(vector<Lit>{}, tc, timeLimit); }
+
 
     lbool solve(const vector<Lit> & assumps)
-    { vector<Lit> tc; return solve(assumps, tc); }
+      { vector<Lit> tc; return solve(assumps, tc); }
 
     lbool solve(Lit l) 
-    { vector<Lit> tc; return solve(vector<Lit> {l}, tc); }
+      { vector<Lit> tc; return solve(vector<Lit> {l}, tc); }
 
+    lbool relaxSolve(const vector<Lit>& assumps, const vector<Lit>& branchLits, double timeLimit) {
+      int64_t propBudget, props;
+      if(timeLimit <= 0)
+	propBudget = -1;
+      else {
+	props = getProps(); //returns total number of props done by solver
+	if(solves > 0 && props > 0) 
+	  propBudget = props/totalTime * timeLimit;
+	else 
+	  propBudget = 1024*1024*10;
+      }
+      stime = cpuTime();
+      prevTotalTime = totalTime; 
+      auto val = relaxSolve_(assumps, branchLits, propBudget);
+      solves++;
+      totalTime += cpuTime() - stime;
+      stime = -1;
+      return val;
+    }
+
+    virtual lbool relaxSolve_(const vector<Lit>& assumps, const vector<Lit>& branchLits,
+		      int64_t propBudget) = 0;
+
+
+    //preprocessing
+    virtual void freezeVar(Var v) = 0;
+    virtual bool eliminate(bool turn_off_elim) = 0;
+    virtual int nEliminated() = 0;
     
     //simplify clauses according to detected forced literals.
     //return false if unsat already detected
@@ -136,12 +178,30 @@ namespace MaxHS_Iface {
     virtual bool findImplications(const Lit p, vector<Lit>& imps) {
       return findImplications({p}, imps); }
 
+
     virtual vector<Lit> getForced(int index) = 0; 
 
     //data from the solver
     virtual int nAssigns() const = 0; //# assigned variables
     virtual int nClauses() const = 0; //# original clauses
-    virtual int nVars() const = 0;    //# variables
+    virtual int nInVars() const = 0;    //# internal variables
+    virtual size_t nVars() const = 0;   //# number of external variables known to the solver.
+    virtual bool activeVar(Var v) const = 0; //Is this external variable active in the solver? 
+                                             //inactive if never added, eliminated by preprocessing
+                                             //or forced.
+
+
+    //get upper bound on number of clauses in solver DB (some might be deleted or satisfied)
+    int getNClauses(bool learnts) { return learnts ? get_learnts_size() : get_clauses_size(); }
+    virtual int get_clauses_size() const = 0;
+    virtual int get_learnts_size() const = 0;
+    //get the ith clause from solvers DB (converted to external variables)
+    //if the empty vector is returned then there is no ith clause (was deleted or satisfied)
+    //or i is to large.
+    vector<Lit> getIthClause(int ith, bool learnts) { 
+      return learnts ? getIth_learnts(ith) :getIth_clauses(ith); }
+    virtual vector<Lit> getIth_clauses(int ith) const = 0;
+    virtual vector<Lit> getIth_learnts(int ith) const = 0;
     
     //Reduce a sequence of lits by values forced at decision level 0.
     //   ==> true if sequence has true or complimentary lits
@@ -153,16 +213,20 @@ namespace MaxHS_Iface {
     virtual bool addClause(const vector<Lit>& lts) = 0;
     bool addClause(Lit p) { vector<Lit> tmp; tmp.push_back(p); return(addClause(tmp)); }
 
+    //set polarity of variable (lbool b = l_True if we give it a sign---set to false)
+    virtual void setPolarity(Var v, lbool b) = 0;
+
+    //set Var as decision (variable should already be known to the solver, e.g., in added clause)
+    virtual void setDecisionVar(Var v, bool b) = 0;
+
     //install variable b as a new control variables. b must not have been previously added
     //if decisionVar is false the solver won't branch on b, if polarity is set when the solver
     //does branch on b it will set its value to polarity (l_Undef lets the solver pick)
     virtual void newControlVar(Var b, bool decisionVar=true, lbool polarity=l_Undef) = 0;
+
     //free variable by setting l to TRUE, simplifying, and freeing var(l)
     //to be available for future use.
     virtual void freeVar(Lit l)  = 0;
-
-    //uset b as a decision variable.
-    virtual void setNoDecision(Var b) = 0;
 
     //get info from clause
     virtual void printLit(Lit l) const = 0;
@@ -181,8 +245,8 @@ namespace MaxHS_Iface {
     virtual lbool modelValue(Var x) const = 0;
     
     //get current truth values (only set if variable is forced)
-    virtual lbool curVal(Var x) const = 0;
-    lbool curVal(Lit p) const { return curVal(var(p)) ^ sign(p); }
+    virtual lbool curVal(const Var x) const = 0;
+    lbool curVal(const Lit p) const { return curVal(var(p)) ^ sign(p); }
     
     //stats
     //Use startTimer and elapTime to accumulate time over a set of SAT solver calls.

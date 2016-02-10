@@ -1,5 +1,5 @@
-/***********[MaxSolverTypes.h]
-Copyright (c) 2012-2013 Jessica Davies, Fahiem Bacchus
+/***********[Bvars.cc]
+Copyright (c) 2012-2015 Jessica Davies, Fahiem Bacchus
 
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the
@@ -22,13 +22,25 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
 
-#ifndef MaxSolverTypes_h
-#define MaxSolverTypes_h
+#include <ostream>
+#include "maxhs/core/Bvars.h"
 
-typedef double Weight;
-
-enum class CoreType { cores, nonCores, mixed };
-enum class CoreRelaxFn { rand, maxoccur, frac };
-enum class SeedType { none, cores, nonCores, mixed };
-
-#endif
+Bvars::Bvars(const Wcnf* f) :
+  theWcnf {f}, 
+  maxbvar {0},
+  clsBlit {theWcnf->nSofts(), Minisat::lit_Undef},
+  bvarCls {}
+  {
+    Var nxtbvar {theWcnf->nVars()};
+    for(size_t i = 0; i < theWcnf->nSofts(); i++) {
+      auto scls = theWcnf->softs()[i];
+      if(scls.size() == 1) 
+	clsBlit[i] = ~scls[0]; //blit false means clause must be satisfied
+      else
+	clsBlit[i] = mkLit(nxtbvar++);
+      maxbvar = maxbvar < var(clsBlit[i]) ? var(clsBlit[i]) : maxbvar;
+    }
+    bvarCls.resize(maxbvar+1, -1);
+    for(size_t i = 0; i < theWcnf->nSofts(); i++) 
+      bvarCls[var(clsBlit[i])] = i;
+  }

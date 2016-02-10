@@ -34,11 +34,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 using Minisat::Lit;
 using Minisat::var;
+using Minisat::lbool;
 
 class Assumps {
   //MaxSolver helper class
 public:
-  Assumps(MaxHS_Iface::SatSolver* s, Bvars b) : satsolver{s}, bvars{b} {
+//  Assumps(MaxHS_Iface::SatSolver* s, Bvars& b, vector<uint8_t>& mx) : satsolver{s}, bvars (b), inMx (mx) {
+  Assumps(MaxHS_Iface::SatSolver* s, Bvars& b) : satsolver{s}, bvars (b) {
     map.resize(bvars.n(), -1); }
   ~Assumps() {}
   void init(const vector<Lit>& ivals, CoreType ctype); 
@@ -57,7 +59,11 @@ private:
   vector<Lit> assumps;
   vector<int> map;
   MaxHS_Iface::SatSolver* satsolver;
-  Bvars bvars;
+  Bvars& bvars;
+//  const uint8_t inMxdvar = 2;
+//  const uint8_t inMxbvar = 1;
+//  vector<uint8_t>& inMx;
+//
   void clearIndex(Lit l) {
     map[bvars.toIndex(var(l))] = -1;
   }
@@ -78,8 +84,14 @@ private:
     if(getIndex(l) < 0) 
       cout << "c ERROR tried to update literal not in assumptions\n";
     if(assumps[getIndex(l)] != ~l) 
-      cout << "c WARNING conflict agrees with assumption---no update being done\n";
-  }    
+      cout << "c WARNING conflict agrees with assumption---no real update being done\n";
+  }
+//  bool dVar(Lit b) {
+//    return (static_cast<size_t>(bvars.toIndex(b)) < inMx.size() && inMx[bvars.toIndex(b)] == inMxdvar);
+//  }
+//  bool bVarInMx(Lit b) {
+//    return (static_cast<size_t>(bvars.toIndex(b)) < inMx.size() && inMx[bvars.toIndex(b)] == inMxbvar);
+//  }
 };
 
 #endif

@@ -49,6 +49,10 @@ static void SIGINT_exit(int signum) {
     }
 }
 
+const int majorVer {2};
+const int minorVer {9};
+const int update {0};
+
 int main(int argc, char** argv) {
   try {
     setUsageHelp("USAGE: %s [options] <input-file>\n  where input may be either in plain or gzipped DIMACS.\n");
@@ -66,10 +70,10 @@ int main(int argc, char** argv) {
     params.readOptions();
 
     if(version) {
-      printf("MaxHS %d.%d\n", 2, 51);
+      cout << "MaxHS " << majorVer << "." << minorVer << "." << update << "\n";
       return(0);
     }
-    printf("c MaxHS %d.%d\n", 2, 51);
+    cout << "c MaxHS " << majorVer << "." << minorVer << "." << update << "\n";
     
     signal(SIGINT, SIGINT_exit);
     signal(SIGXCPU, SIGINT_exit);
@@ -83,7 +87,7 @@ int main(int argc, char** argv) {
       if (rl.rlim_max == RLIM_INFINITY || (rlim_t)cpu_lim < rl.rlim_max){
 	rl.rlim_cur = cpu_lim;
 	if (setrlimit(RLIMIT_CPU, &rl) == -1)
-	  printf("c WARNING! Could not set resource limit: CPU-time.\n");
+	  cout << "c WARNING! Could not set resource limit: CPU-time.\n";
       } }
     
     if (mem_lim != INT32_MAX){
@@ -93,7 +97,7 @@ int main(int argc, char** argv) {
       if (rl.rlim_max == RLIM_INFINITY || new_mem_lim < rl.rlim_max){
 	rl.rlim_cur = new_mem_lim;
 	if (setrlimit(RLIMIT_AS, &rl) == -1)
-	  printf("c WARNING! Could not set resource limit: Virtual memory.\n");
+	  cout << "c WARNING! Could not set resource limit: Virtual memory.\n";
       } }
     
     if(argc < 2) {
@@ -105,11 +109,23 @@ int main(int argc, char** argv) {
     Wcnf theFormula {};
     if (!theFormula.inputDimacs(argv[1])) 
       return 1;
-    theFormula.printFormulaStats();
+
+    /*cout << "Different wts " << theFormula.nDiffWts() << " = " << theFormula.getDiffWts() << "\n";
+    cout << "Mutexes ";
+    for(size_t i=0; i < theFormula.getMxs().size(); i++) {
+      cout << "#" << i << ". ";
+      if(theFormula.isCoreMx(i))
+	cout << "Core Mx     ";
+      else
+	cout << "Non-Core Mx ";
+      cout << theFormula.getMxs()[i] << "\n";
+    }
+    theFormula.printFormula();*/
+
 
     MaxHS::MaxSolver S(&theFormula);
     thesolver = &S;
-    S.solve_maxsat();
+    S.solve();
     S.printStatsAndExit(-1, 0);
   }
   catch(std::bad_alloc) {
@@ -117,7 +133,7 @@ int main(int argc, char** argv) {
     thesolver->printStatsAndExit(100, 1);
   }
   catch (...) {
-    printf("c Unknown exception probably memory.\n");
+    cout << "c Unknown exception probably memory.\n";
     thesolver->printStatsAndExit(200, 1);
   } 
   fflush(stdout);

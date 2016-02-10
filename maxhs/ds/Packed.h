@@ -46,8 +46,8 @@ public:
   class const_iterator;
 
   Packed_vecs() {};
-  Packed_vecs(vector<vector<T> > init_vecs);
-  Packed_vecs(std::initializer_list<vector<T> > ilist); 
+  Packed_vecs(vector<vector<T>> init_vecs);
+  Packed_vecs(std::initializer_list<vector<T>> ilist); 
 
   //keep default move constructors and assignments. 
   Packed_vecs(Packed_vecs &&) = default;
@@ -64,6 +64,7 @@ public:
   /* internal vectors <--> standard vectors */
   void addVec(const vector<T> &); //will add and get zero sized vecs.
   vector<T> getVec (size_t i) const;
+  size_t ithSize(size_t i) const; //Return size of i-th internal vector
 
   void compress(); //remove spaces; Retain zero length vectors
   void rm_empty_vecs();  //remove zero length vectors...don't do this
@@ -92,6 +93,7 @@ public:
     typename vector<T>::iterator end() const { return begin()+p->sizes[i]; }
     T& operator[](size_t j) const { return p->allVecs[p->offsets[i]+j]; }
     void shrink(size_t n) const { p->sizes[i] -= n; }
+    vector<T> getVec() const { return p->getVec(i); }
   private:
     size_t i;
     Packed_vecs<T> *p;
@@ -107,6 +109,7 @@ public:
     typename vector<T>::const_iterator end() const {
       return begin()+p->sizes[i]; }
     const T& operator[](size_t j) const { return p->allVecs[p->offsets[i]+j]; }
+    const vector<T> getVec() const { return p->getVec(i); }
   private:
     size_t i;
     const Packed_vecs<T> * p;
@@ -194,6 +197,12 @@ inline vector<T> Packed_vecs<T>::getVec(size_t i) const
   for(size_t j = offsets[i]; j < offsets[i] + sizes[i]; j++)
     v.push_back(allVecs[j]);
   return v;
+}
+
+template <class T>
+inline size_t Packed_vecs<T>::ithSize(size_t i) const
+{
+  return sizes[i];
 }
 
 template <class T>

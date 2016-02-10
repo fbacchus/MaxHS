@@ -63,7 +63,8 @@ static double parseDouble(B& in) {
     skipWhitespace(in);
     if      (*in == '-') neg = true, ++in;
     else if (*in == '+') ++in;
-    if ((*in < '0' || *in > '9') && *in != '.' && *in != 'e' && *in != '-' && *in != '+') fprintf(stderr, "PARSE ERROR 3! Unexpected char: %c\n", *in), exit(3);
+    if ((*in < '0' || *in > '9') && *in != '.' && *in != 'e' && *in != '-' && *in != '+') 
+      cerr << "PARSE ERROR 3! Unexpected char: " << *in << "\n", exit(3);
     while ((*in >= '0' && *in <= '9') || *in == '.' || *in == 'e' || *in == '-' || *in == '+') {
 	if (*in == '.') frac = true;
         else if (*in == 'e') {

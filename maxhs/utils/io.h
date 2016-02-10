@@ -71,7 +71,7 @@ ostream& operator<<(ostream& os, const Minisat::vec<T>& v) {
 template<typename T>
 ostream& operator<<(ostream& os, const Packed_vecs<T>& pv) {
   for(const auto& v : pv) {
-    for(auto& item : v) 
+    for(const auto& item : v) 
       os << item << " ";
     os << "0 \n";
   }

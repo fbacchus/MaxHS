@@ -134,8 +134,7 @@ class Heap {
         if (heap.size() > 1) percolateDown(0);
         return x; 
     }
-
-
+  
     // Rebuild the heap from scratch, using the elements in 'ns':
     void build(const vec<K>& ns) {
         for (int i = 0; i < heap.size(); i++)

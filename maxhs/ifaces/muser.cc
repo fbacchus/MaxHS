@@ -32,11 +32,14 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 using namespace MaxHS_Iface;
 using namespace Minisat;
 
-Muser::Muser(const Wcnf* f, Bvars b):
-  theWcnf{f}, bvars{b}, timer {0}, totalTime {0},
+Muser::Muser(const Wcnf* f, Bvars& b):
+  theWcnf{f}, bvars (b), timer {0}, totalTime {0},
   prevTotalTime {0},  stime{-1}, solves {0}, succ_solves {0}, prevSolves{0},
   satSolves {0}, prevSatSolves{0}
 {
+  bool doPre = doPreprocessing();
+  if(!doPre)
+    eliminate(true);
   //Initialize MUS underlying sat solver with hard clauses of Wcnf.
   vec<Lit> ps;
   int nHards {0};
@@ -44,17 +47,63 @@ Muser::Muser(const Wcnf* f, Bvars b):
   for(auto hc : theWcnf->hards()) {
     ps.clear();
     nHards++;
-
     for(auto lt: hc) {
       ensure_mapping(var(lt));
       ps.push(ex2in(lt));
     }
-    if(!Solver::addClause_(ps))
+
+    //cout << "Muser: adding hard clause " << ps << "\n";
+
+    if(!addClause_(ps)) 
       cout << "c WARNING Adding Hard clauses to muser caused unsat.\n";
   }
   if(params.mverbosity > 0)
-    cout << "c MUSER added " << nHards << " hard clauses\n";
+    cout << "c Muser added " << nHards << " hard clauses\n";
+
+  if(doPre) {
+    for(auto sc: theWcnf->softs())
+      for(auto lt: sc) { //the muser must freeze all variables appearing in soft clauses
+	Var v = var(ex2in(lt));
+	if(v != var_Undef) { //if var not in hards the initial eliminate will not affect
+	  //cout << " MUSER freezing " << v << "\n";
+	  freezeVar(v);
+	}
+      }
+    auto start = cpuTime();
+    eliminate(true);
+    if(params.verbosity > 0)
+      cout << "c Muser Preprocess eliminated " << eliminated_vars << " variables. took " << cpuTime()-start << " sec.\n";
+  }
 }
+
+bool Muser::doPreprocessing() const {
+  //test if we should do preprocessing.
+  //We have to freeze all vars appearing in the softs. So if this spans all variables we won't
+  //be able to eliminate any variables in preprocessing.
+  if(!params.preprocess)
+    return false;
+
+  const int dne {0}, nfrz {1}; //markers dne==does not exist, nfrz==not frozen. 
+  int toBeFrozen {0}, totalVars {0}; //
+  vector<char> varStatus(theWcnf->nVars(), dne); 
+
+  for(auto hc: theWcnf->hards())
+    for(auto lt: hc) 
+      if(varStatus[var(lt)] == dne) {
+	++totalVars;
+	varStatus[var(lt)] = nfrz;
+      }
+  for(auto sc: theWcnf->softs())
+    for(auto lt: sc)
+      if(varStatus[var(lt)] == nfrz) {
+	++toBeFrozen;
+	varStatus[var(lt)] = dne;
+      }
+  if(params.verbosity > 0)
+    cout << "c Muser: Vars of hards = " << totalVars << " vars to be frozen = " << toBeFrozen << "\n";
+  return toBeFrozen < totalVars;
+}
+
 
 inline Lit Muser::in2ex(Lit lt) const
 {
@@ -129,7 +178,6 @@ void Muser::ensure_mapping(const Var ex)
 }
 
 vector<Lit> Muser::getForced(int index) {
-  static vector<Lit> forced {};
   //if(params.mverbosity > 3) 
   //  cout << "getForced: forced.size() = " << forced.size() << "\n";
   updateForced(forced);
@@ -144,27 +192,27 @@ vector<Lit> Muser::getForced(int index) {
 }
 
 void Muser::updateForced(vector<Lit>& frc) {
-  int limit = Solver::trail_lim.size() > 0 ?
-    Solver::trail_lim[0] : Solver::trail.size();
+  int limit = trail_lim.size() > 0 ?
+    trail_lim[0] : trail.size();
   int i {0};
 
   //if(params.mverbosity>3)
-  //cout << "updateForced: trail = " << Solver::trail << "\n"
+  //cout << "updateForced: trail = " << trail << "\n"
   // << "  frc.size() = " << frc.size() << "\n";
   
   if(frc.size() > 0) {
     i = frc.size() - 1;
     //if(params.mverbosity>3)
     //cout << "  frc.back() = " << frc.back() << "\n";
-    while(i < limit && Solver::trail[i++] != frc.back());
+    while(i < limit && trail[i++] != frc.back());
   }
 
   //if(params.mverbosity>3)
   //cout << " set i to " << i << "\n";
 
   for( ; i < limit; i++)
-    if(in2ex(Solver::trail[i]) != lit_Undef)
-      frc.push_back(Solver::trail[i]);
+    if(in2ex(trail[i]) != lit_Undef)
+      frc.push_back(trail[i]);
 }
 
 bool Muser::addClause(const vector<Lit>& lts) 
@@ -179,7 +227,7 @@ bool Muser::addClause(const vector<Lit>& lts)
     ps.push(ex2in(lt));
   }
   //cout << "muser addCls: ext=" << lts << " int=" << ps << "\n";
-  return Solver::addClause_(ps); 
+  return addClause_(ps); 
 }
 
 lbool Muser::curVal(Var x) const {
@@ -187,7 +235,7 @@ lbool Muser::curVal(Var x) const {
   if(in == var_Undef)
     return l_Undef;
   else  
-    return Solver::value(in);
+    return value(in);
 }
 
 lbool Muser::curVal(Lit x) const {
@@ -195,7 +243,7 @@ lbool Muser::curVal(Lit x) const {
   if(in == lit_Undef)
     return l_Undef;
   else  
-    return Solver::value(in);
+    return value(in);
 }
 
 void Muser::ensureSoftCls(vector<Lit>& conflict) {
@@ -235,20 +283,20 @@ void Muser::ensureSoftCls(Lit blit) {
     eqCls.clear();
     eqCls.push(~inbPos); eqCls.push(~inLt);
     //if(params.mverbosity > 4) 
-    //cout << "eq cls: [ " << eqCls[0] << "/" << Solver::value(eqCls[0]) 
-    //   << " " << eqCls[1] << "/" << Solver::value(eqCls[1]) << " ]\n";
-    if(!Solver::addClause_(eqCls))
+    //cout << "eq cls: [ " << eqCls[0] << "/" << value(eqCls[0]) 
+    //   << " " << eqCls[1] << "/" << value(eqCls[1]) << " ]\n";
+    if(!addClause_(eqCls))
       cout << "c ERROR minimize equality clause caused UNSAT\n";
   }
   //if(params.mverbosity > 4) {
   //  cout << "Adding sft cls: [";
   //  for(int i = 0; i < ps.size(); i++) 
-  //    cout << ps[i] << "/" << Solver::value(ps[i]) << " ";
+  //    cout << ps[i] << "/" << value(ps[i]) << " ";
   //  cout << "]\n";
   // }
   
 
-  if(!Solver::addClause_(ps))
+  if(!addClause_(ps))
     cout << "c ERROR Adding soft clauses of conflict to muser caused unsat.\n";
 }
 
@@ -259,7 +307,7 @@ void Muser::preProcessConflict(vector<Lit>& conflict) {
 
   size_t j {0};
   for(auto lt : conflict) {
-    auto val = Solver::value(ex2in(lt));
+    auto val = value(ex2in(lt));
     if(val == l_Undef) 
       conflict[j++] = ex2in(lt);
     else if(val == l_True) {
@@ -274,7 +322,6 @@ bool Muser::mus_(vector<Lit>& conflict, int64_t propBudget) {
   //reduce conflict to a MUS, return true if we succeeded. 
   //don't use more than probBudget props to do so.
   bool isMus {true};
-
   ensureSoftCls(conflict);
   preProcessConflict(conflict);
 
@@ -287,76 +334,88 @@ bool Muser::mus_(vector<Lit>& conflict, int64_t propBudget) {
     }
     return isMus;
   }
+  auto notInCon = [this](Lit l){ return !SimpSolver::conflict.has(l); };
+  bool haveBudget = propBudget > 0;
+  int64_t perTestBudget = propBudget/16;
+  uint64_t initialProps = propagations;
 
-  auto notInCon = [this](Lit l){ return !Solver::conflict.has(l); };
-
-  propagation_budget = (propBudget < 0) ? -1 : propagations + propBudget;
-  Solver::assumptions.clear();
-
+  assumptions.clear();
   while(conflict.size() > 0) {
-    Lit test = conflict.back();
-    conflict.pop_back();
-    int ncrits = Solver::assumptions.size();
-    for(size_t i = 0; i < conflict.size(); i++) 
-      Solver::assumptions.push(~conflict[i]);
-    auto val = Solver::solve_();
-    satSolves++;
-
-    //if(params.mverbosity > 3) {
-    // cout << "Conflict = " << conflict << "\n";
-    //  cout << "Assumptions = " << Solver::assumptions << "\n";
-    //  cout << "test = " << test << " val = " << val << "\n";
-    //}
-
-    Solver::assumptions.shrink(Solver::assumptions.size() - ncrits);
-
-    if(val == l_Undef) { //timed out
-      Solver::assumptions.push(~test);
+    if(haveBudget && (propagations - initialProps >= static_cast<uint64_t>(propBudget))) { //timed out
       for(size_t i = 0; i < conflict.size(); i++)
-	Solver::assumptions.push(~conflict[i]); //act like all remaining conflict lits are critical
+        //act like all remaining conflict lits are critical and end loop
+	assumptions.push(~conflict[i]); 
       conflict.clear();
       isMus = false;
     }
-    else if(val == l_False) { //redundant
-      auto p = std::remove_if(conflict.begin(), conflict.end(), notInCon);
-      conflict.erase(p, conflict.end()); 
-    }
-    else { // l_True:
-      Solver::assumptions.push(~test); 
-      isMus = addMoreCrits(conflict);
+    else {
+      //test next conflict literal for criticality
+      Lit test = conflict.back();
+      conflict.pop_back();
+      //lits in assumptions are already known to be critical
+      int ncrits = assumptions.size(); 
+      for(size_t i = 0; i < conflict.size(); i++) 
+	assumptions.push(~conflict[i]);
+      setPropBudget(haveBudget, perTestBudget);
+      auto val = solve_();
+      satSolves++;
+
+      if(params.mverbosity > 3) {
+	cout << "Conflict = " << conflict << "\n";
+        cout << "Assumptions = " << assumptions << "\n";
+	cout << "Prop budget for test " << perTestBudget << "\n";
+        cout << "test = " << test << " val = " << val << "\n";
+      }
+      
+      assumptions.shrink(assumptions.size() - ncrits); //restore assumptions to crits only
+      if(val == l_Undef) { //this test timed out. 
+	assumptions.push(~test); //assume test is critical.
+	isMus = false; //don't know if we have a mus any more.
+      }
+      else if(val == l_False) { //redundant
+	auto p = std::remove_if(conflict.begin(), conflict.end(), notInCon);
+	conflict.erase(p, conflict.end()); 
+      }
+      else { // l_True:
+	assumptions.push(~test); 
+	addMoreCrits(conflict, haveBudget ? perTestBudget : -1);
+      }
     }
   }
-
+  
   assert(conflict.size() == 0);
-  for(int i = 0; i < Solver::assumptions.size(); i++)
-    conflict.push_back(in2ex(~Solver::assumptions[i]));
-
+  //convert assumptions back into a conflict.
+  for(int i = 0; i < assumptions.size(); i++)
+    conflict.push_back(in2ex(~assumptions[i]));
+  
   //if(params.mverbosity > 1) 
   //  cout << "mus_ returns conflict: " << conflict << "\n";
-
+  
   return isMus;
 }
 
-bool Muser::addMoreCrits(vector<Lit>& conflict)
+void Muser::addMoreCrits(vector<Lit>& conflict, int64_t propBudget)
 {
   if(conflict.size() <= 1) 
-    return true;
-  
+    return;
+
   int critsFnd {0};
 
   //Insert removable most one constraint over conflicts to more criticals
-  int aInitSize = Solver::assumptions.size();
+  int aInitSize = assumptions.size();
   vector<Lit> clits = addAmoUnk(conflict);
   lbool critVal;
   vector<char> isCrit(conflict.size(), false);
   
-  Solver::assumptions.push(~clits[0]); //activate at-most-one
-  while((critVal = Solver::solve_()) == l_True) {
+  assumptions.push(~clits[0]); //activate at-most-one
+  setPropBudget(propBudget > 0, propBudget);
+
+  while((critVal = solve_()) == l_True) {
     satSolves++;
     for(size_t j = 0; j < conflict.size(); j++) {
-      if(Solver::modelValue(conflict[j]) == l_True) {
+      if(modelValue(conflict[j]) == l_True) {
 	isCrit[j] = true;
-	Solver::assumptions.push(~conflict[j]);
+	assumptions.push(~conflict[j]);
 	break;
       }
     }
@@ -364,17 +423,10 @@ bool Muser::addMoreCrits(vector<Lit>& conflict)
   satSolves++;
   //Note that clits don't go through the ex-to-in interface. They are internal variables only.
   for(auto lt : clits)
-    Solver::releaseVar(lt);
+    releaseVar(lt);
 
-  Solver::assumptions.shrink(Solver::assumptions.size() - aInitSize);
-  if(critVal == l_Undef) {  //timed out
-    for(size_t i = 0; i < conflict.size(); i++)
-      assumptions.push(~conflict[i]); //act like all remaining conflict lits are critical
-    conflict.clear();
-    return false;
-  }
-
-  size_t j {0};
+  assumptions.shrink(assumptions.size() - aInitSize);
+  size_t j {0}; //move lits detected to be critical into assumptions
   for(size_t i = 0; i < conflict.size(); i++) {
     if(isCrit[i]) {
       critsFnd++;
@@ -384,11 +436,13 @@ bool Muser::addMoreCrits(vector<Lit>& conflict)
       conflict[j++] = conflict[i];
   }
   conflict.resize(j);
-  if(j > 0) conflict.pop_back();
+  if(critVal == l_False && conflict.size()  > 0)
+    //If we detected unsat even when any one of the remaining conflict lits
+    //was allowed to be relaxed, then we can remove any one of these lits.
+    conflict.pop_back(); 
 
-  //if(params.mverbosity>1) 
-  // cout << "addMoreCrits added " << critsFnd << "\n";
-  return true;
+  if(params.mverbosity>1) 
+    cout << "addMoreCrits added " << critsFnd << "\n";
 }
 
 vector<Lit> Muser::addAmoUnk(vector<Lit>& unknowns) {
@@ -401,7 +455,7 @@ vector<Lit> Muser::addAmoUnk(vector<Lit>& unknowns) {
   
   vector<Lit> clits;
   for(size_t i = 0; i < unknowns.size(); i++) {
-    Var c = Solver::newVar(l_Undef, false);
+    Var c = newVar(l_Undef, false);
     clits.push_back(mkLit(c, false));
     if(c >= static_cast<Var>(in2ex_map.size()))
       in2ex_map.resize(c+1, var_Undef); //space reserved in in2ex_map for these internal only vars
@@ -412,21 +466,21 @@ vector<Lit> Muser::addAmoUnk(vector<Lit>& unknowns) {
     cls[0] = ~unknowns[i];  //unk_i --> clit_i+1
     cls[1] = clits[i+1];  //~clit_i+1 >> ~unk_i
     cls[2] = clits[0];
-    Solver::addClause_(cls);
+    addClause_(cls);
   }
   
   for(size_t i = 1; i < clits.size()-1 ; i++) {
     cls[0] = ~clits[i];   //clit_i --> clit_i+1
     cls[1] = clits[i+1];  //~clit_i+1 --> ~clit_i
     cls[2] = clits[0];
-    Solver::addClause_(cls);
+    addClause_(cls);
   }
   
   for(size_t i = 1; i < clits.size(); i++) {
     cls[0] = ~clits[i];  //clit_i --> ~unk_i
     cls[1] = ~unknowns[i]; //unk_i --> ~clit_i
     cls[2] = clits[0];    
-    Solver::addClause_(cls);
+    addClause_(cls);
   }
 
   return clits;
@@ -447,8 +501,8 @@ void Muser::analyzeFinal(Lit p, LSet& out_conflict)
   seen[var(p)] = 1;
 
   LSet assumps;
-  for(int i = 0; i < Solver::assumptions.size(); i++) {
-    assumps.insert(Solver::assumptions[i]);
+  for(int i = 0; i < assumptions.size(); i++) {
+    assumps.insert(assumptions[i]);
   }
   
   for (int i = trail.size()-1; i >= trail_lim[0]; i--){
