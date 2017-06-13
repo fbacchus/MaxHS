@@ -28,7 +28,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 typedef double Weight;
 
 enum class CoreType { cores, nonCores, mixed };
-enum class CoreRelaxFn { rand, maxoccur, frac };
-enum class SeedType { none, cores, nonCores, mixed };
+enum class CoreRelaxFn { rand, maxoccur, frac, dsjn };
 
 #endif

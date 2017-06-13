@@ -25,11 +25,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef CPLEX_H
 #define CPLEX_H
 
-#include <ilcplex/cplex.h> 
+#include <ilcplex/cplexx.h> 
 #include <map>
 #include <vector>
 #include "maxhs/core/MaxSolverTypes.h"
 #include "maxhs/core/Bvars.h"
+#include "maxhs/core/Wcnf.h"
 #include "minisat/core/SolverTypes.h"
 #include "minisat/utils/System.h"
 
@@ -39,35 +40,55 @@ using std::vector;
 namespace MaxHS_Iface {
   class Cplex {
   public:
-    Cplex(Bvars& b, vector<lbool>& ubModelSofts);
+    Cplex(Bvars& b, vector<lbool>& ubModelSofts, bool integerWts);
     ~Cplex();
 
-    Weight solveBudget(vector<Lit>& solution, double timeLimit) {
-      //return a setting of all bvars. If the var is not mentioned
-      //in the cplex problem, return the literal that has zero weight
-      //in the solution. 
+    Weight solveBudget(vector<Lit>& solution, double UB, double timeLimit) {
+      //return a setting of all bvars in solution. If the var is not
+      //mentioned in the cplex problem, return the literal that has
+      //zero weight in the solution. Also return the best lower bound found by Cplex.
+      //If the cost of "solution" == lower bound returned, this was an optimal cplex solution
       stime = cpuTime();
       prevTotalTime = totalTime;
-      auto val = solve_(solution, timeLimit);
+      auto val = solve_(solution, UB, timeLimit);
       totalTime += cpuTime() - stime;
       stime = -1;
       numSolves++;
       return val; 
     }
-    Weight solve(vector<Lit>& solution) {
-      return solveBudget(solution, -1);
+
+    Weight solve(vector<Lit>& solution, double UB) {
+      return solveBudget(solution, UB, -1);
     }
 
     //try to populate cplex solutions using a time limit...don't return 
     //them return the number of solutions.
-    int populate(double timeLimit);
-    int populate() { return populate(-1); }
+    int populate(double timeLimit, double gap);
+    int populate(double gap) { return populate(-1, gap); }
     void getPopulatedSolution(int, vector<Lit>&);
+    //Other special purpose solvers
+    //  Does the conjunction of lits cause the problem to exceed UB?
+    bool exceeds_bounds(vector<Lit>& lits, Weight UB, double timeLimit);
+    bool exceeds_bounds(Lit l, Weight UB, double timeLimit)
+      { vector<Lit> lits {l};
+        return exceeds_bounds(lits, UB, timeLimit); }
+
+    //solve the lp relaxation...return objective value of LP relaxation
+    //vector of solution weights and reduced costs indexed by soft clause index
+    //e.g., solution[i] = weight of blit of i-th soft clause. 
+    Weight solve_lp_relaxation(vector<Weight>& solution, vector<Weight>& reduced_costs) {
+      auto startTime = cpuTime();
+      auto val = solve_lp_relaxation_(solution, reduced_costs);
+      totalLPTime += cpuTime() - startTime;
+      numLPSolves++;
+      return val;
+    }
 
     bool is_valid() { return solver_valid; }
     bool add_clausal_constraint(vector<Lit>& con);
-    bool add_mutex_constraint(vector<Lit>& con);
-    //void add_impl_constraint(Lit blit, const vector<Lit>& con);
+    bool add_mutex_constraint(const SC_mx& mx);
+    bool var_in_cplex(Var v) { return ex2in(v) != var_Undef; }
+    bool lit_in_cplex(Lit l) { return var_in_cplex(var(l)); }
 
     //stats
     int nCnstr() { return numConstraints; }
@@ -81,32 +102,48 @@ namespace MaxHS_Iface {
         totalTime += cpuTime() - stime;
       return totalTime;
     }
+
+    double total_lp_time() { return totalLPTime; }
     int nSolves() { return numSolves; }
+    int nLPSolves() { return numLPSolves; }
+
+    //public for call back access --- friend should work?
+    void processError(int status, bool terminal, const char *msg);
 
   protected:
     Bvars& bvars;
     vector<lbool>& ubModelSofts;
     CPXENVptr env;
     CPXLPptr mip;
+    CPXLPptr trial_mip; //use this mip to do lp-relaxation and trial hardening
     bool solver_valid;
+    bool intWts;
+    double LB;
+    double absGap;
 
     //forced units (in external ordering)
     vector<lbool> exUnits;
     void setExUnits(Lit l);
     lbool getExUnits(Lit l);
 
-    void processError(int status, bool terminal, const char *msg);
+    //main processing code
     void addNewVar(Var ex);
+    Weight getSolution(vector<Lit> &solution, bool optimal); 
+    Weight solve_(vector<Lit>& solution, double UB, double timeLimit);
+    Weight solve_lp_relaxation_(vector<Weight>& solution, vector<Weight>& reduced_costs);
+
+    //internal cplex routines
+    void writeCplexModel();
+    void useBestModelStart(CPXLPptr);
 
     //Stats
     int numSolves;
     double totalTime, stime, prevTotalTime;
+    int numLPSolves;
+    double totalLPTime;
+    
     int numConstraints, numNonCoreConstraints;
     uint64_t totalConstraintSize, totalNonCoreSize;
-
-    Weight getSolution(vector<Lit> &solution); 
-    Weight solve_(vector<Lit>& solution, double timeLimit);
-
 
 
     //External to Internal Mapping

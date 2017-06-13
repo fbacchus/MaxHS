@@ -31,47 +31,53 @@ using Minisat::lit_Undef;
 
 
 void Assumps::init(const vector<Lit>& ivals, CoreType coreType) {
-  //initialize assumptions with set of literals.  If only looking for
-  //cores, add only noncore vars (conflict will be negation == core)
-  assert(ivals.size() <= static_cast<size_t>(bvars.n()));
-  //Perhaps sort assumps?
-  assumps.clear();
+  //initialize assumptions with set of b-lits. coreType determines
+  //what kind of conflicts we are looking for. If looking for cores,
+  //add only noncore vars (conflict will be negation == core), etc.
 
+  assumps.clear();
   for(auto l : ivals) {
     assert(bvars.isBvar(l));
     if(satsolver->curVal(l) != l_True) 
       //Don't need true lits in assumption.
       switch(coreType) {
       case CoreType::cores:
-//	if(bvars.isNonCore(l) && !bVarInMx(l))
-	if(bvars.isNonCore(l))
-	  assumps.push_back(l);
-	break;
+        if(bvars.isNonCore(l))
+          assumps.push_back(l);
+        break;
       case CoreType::nonCores:
-	if(bvars.isCore(l))
-	  assumps.push_back(l);
-	break;
+        if(bvars.isCore(l))
+          assumps.push_back(l);
+        break;
       case CoreType::mixed:
-	assumps.push_back(l);
+          assumps.push_back(l);
       }
-
-    if (satsolver->curVal(l) == l_False) {
+    if (satsolver->curVal(l) == l_False)
       cout << "c WARNING assumptions being initialized with false lit\n";
-    }
   }
   setMap();  
 }
 
-void Assumps::initAllSofts() {
+void Assumps::all_softs_true() {
   //harden all softs not yet forced.
   assumps.clear();
-  for(size_t i = 0; i < bvars.n(); i++)
-//    if(satsolver->curVal(bvars.varOfCls(i)) == l_Undef && !dVar(~bvars.litOfCls(i)))
+  for(size_t i = 0; i < bvars.n_bvars(); i++)
     if(satsolver->curVal(bvars.varOfCls(i)) == l_Undef)
       assumps.push_back(~bvars.litOfCls(i));
   setMap();
 }
    
+void Assumps::exclude(const vector<Lit>& ex) {
+  //Unlike update exclude removes the lits without regard for its polarity.
+  for(auto l : ex)
+    if(getIndex(l) >= 0)
+      assumps[getIndex(l)] = lit_Undef;
+  auto isUndef = [](Lit l) { return l == lit_Undef; };
+  auto p = std::remove_if(assumps.begin(), assumps.end(), isUndef);
+  assumps.erase(p, assumps.end());
+  setMap();
+}
+
 void Assumps::update(const vector<Lit>& conflict, bool rm) {
   //Update assumptions with set of literals in conflict. Flip
   //flip the assumptions--if using Fb or remove the assumptions if
@@ -87,6 +93,8 @@ void Assumps::flip(const vector<Lit>& conflict) {
   //with conflict.
   for(auto l : conflict) {
     checkUpdate(l);
+    if(assumps[getIndex(l)] == l)
+      cout << "c WARNING conflict agrees with assumption---no real update in flip assumptions\n";
     assumps[getIndex(l)] = l;
   }
 }
@@ -94,11 +102,9 @@ void Assumps::flip(const vector<Lit>& conflict) {
 void Assumps::remove(const vector<Lit>& conflict) {
   //conflict variables must be in assumps.
   //perserve order of assumps.
-  for(auto l : conflict) {
-    checkUpdate(l);
-    assumps[getIndex(l)] = lit_Undef;
-    clearIndex(l);
-  }
+  for(auto l : conflict)
+    if(checkUpdate(l))
+      assumps[getIndex(l)] = lit_Undef;
   auto isUndef = [](Lit l) { return l == lit_Undef; };
   auto p = std::remove_if(assumps.begin(), assumps.end(), isUndef);
   assumps.erase(p, assumps.end());

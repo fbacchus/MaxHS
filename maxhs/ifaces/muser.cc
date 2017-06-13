@@ -40,6 +40,7 @@ Muser::Muser(const Wcnf* f, Bvars& b):
   bool doPre = doPreprocessing();
   if(!doPre)
     eliminate(true);
+
   //Initialize MUS underlying sat solver with hard clauses of Wcnf.
   vec<Lit> ps;
   int nHards {0};
@@ -487,6 +488,8 @@ vector<Lit> Muser::addAmoUnk(vector<Lit>& unknowns) {
 }
   
 
+//REMOVE FOR NOW
+#if 0
 void Muser::analyzeFinal(Lit p, LSet& out_conflict)
 {
   //Changes from original: stop resolving backwards when we hit an
@@ -525,6 +528,7 @@ void Muser::analyzeFinal(Lit p, LSet& out_conflict)
   
   seen[var(p)] = 0;
 }
+#endif
 
 
 

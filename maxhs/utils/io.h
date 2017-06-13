@@ -28,6 +28,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "minisat/core/SolverTypes.h"
 #include "maxhs/ds/Packed.h"
 #include "minisat/mtl/Vec.h"
+//#include "maxhs/ifaces/SatSolver.h"
 
 using std::ostream;
 using std::vector;
@@ -77,5 +78,4 @@ ostream& operator<<(ostream& os, const Packed_vecs<T>& pv) {
   }
   return os;
 }
-
 #endif

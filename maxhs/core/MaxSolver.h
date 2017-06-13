@@ -85,6 +85,7 @@ protected:
   Weight forced_wt;
 
   Weight lower_bnd;  //lower bound on wt false soft clauses.
+  Weight absGap;     //Stop when (UB() - LB()) <= absGap (absGap will be zero for integer weights).
   void improveModel(); //try to improve the cost of a sat model.
   void updateLB(Weight wt) { if (wt > lower_bnd) lower_bnd = wt; }
   Weight updateUB();
@@ -96,6 +97,7 @@ protected:
   vector<lbool> tmpModelSofts; //Temp vector for holding satisfied status of softs in latest model.
 
   bool haveUBModel;
+  bool have_new_UB_model;
   void setUBModel();
 
   //SAT solver interaction
@@ -139,10 +141,13 @@ protected:
   //Manage Cplex and Greedy solver Clauses.
   vector<int> bLitOccur; 
   Packed_vecs<Lit> cplexClauses;
+  Packed_vecs<Lit> greedyClauses;
   Packed_vecs<int> sftSatisfied; //map from ordinary var --> satisfied sft clauses
+
   void cplexAddNewClauses();
+  void greedyAddNewClauses();
   bool cplexAddCls(vector<Lit>&& cls); //moves it argument in. Can only input temporaries.
-  void storeCplexCls(const vector<Lit>& cls);
+  void store_cplex_greedy_cls(const vector<Lit>& cls);
 
   //Transfer units between sub-solvers.
   void greedyAddNewForcedBvars();
@@ -166,7 +171,7 @@ protected:
   void printErrorAndExit(const char *msg);
   void printSolution(const vector<lbool>& model);
   void printCurClause(const vector<Lit> &cls);
-  void reportCplex(Weight solnWt);
+  void reportCplex(Weight cplexLB, Weight solnWt);
   void reportSAT_min(lbool result, double iTime, size_t orig_size, int nMins, double mTime, size_t final_size);
   void reportForced(const vector<Lit> &forced, Weight wt);
   void outputConflict(const vector<Lit> &conf);
@@ -182,7 +187,16 @@ protected:
   void disjointPhase();
   void seqOfSAT_maxsat();
   int feedCplex(int gIter, Assumps& a, int nSoFar, size_t sizeSoFar);
-  void tryPopulate(vector<Lit>&, double);
+  bool tryHarden();
+  int  n_softs_forced_hard;
+  int  n_softs_forced_relaxed;
+  int  n_softs_forced_hard_not_in_cplex;
+
+  void tryPopulate(vector<Lit> &, double);
+  bool get_conflicts(const vector<Lit> &, bool check_if_blocked);
+  bool get_greedy_conflicts();
+  bool get_ub_conflicts();
+  int get_seq_of_conflicts(const vector<Lit>&, double, double);
 
   //For forced by bounding or failed lit tests
   vector<Weight> impWt;    //holds the implied weight of a literal
@@ -231,12 +245,13 @@ protected:
 
   // Noncore stuff
   void seed_equivalence();
-  bool isCore(const vector<Lit>& core);
+  bool allClausesSeeded;
+  bool vec_isCore(const vector<Lit>& core);
 
-  // Accumulate Cores 
-  vector<Lit> getAssumpUpdates(int sinceCplex, int sinceGreedy, vector<Lit>& core);
+  // Accumulate Cores
+  vector<Lit> getAssumpUpdates(int sinceCplex, vector<Lit>& core);
   vector<Lit> greedySoln();
-  vector<Lit> fracOfCore(int nCplex, int nGreedy, vector<Lit> &core);
+  vector<Lit> fracOfCore(int nCplex, vector<Lit> &core);
   Lit maxOccurring(const vector<Lit>& core);
   void incrBLitOccurrences(const vector<Lit> &core);
   lbool satsolve_min(const Assumps &inAssumps, vector<Lit> &outConflict, double sat_cpu_lim, double mus_cpu_lim);

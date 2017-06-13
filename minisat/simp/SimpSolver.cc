@@ -28,7 +28,7 @@ using namespace Minisat;
 // Options:
 
 
-static const char* _cat = "SIMP";
+static const char* _cat = "K: MINISAT simplifier";
 
 static BoolOption   opt_use_asymm        (_cat, "asymm",        "Shrink clauses by asymmetric branching.", false);
 static BoolOption   opt_use_rcheck       (_cat, "rcheck",       "Check if a clause is already implied. (costly)", false);

@@ -54,6 +54,8 @@ public:
   Packed_vecs& operator=(Packed_vecs &&) = default;
   
   size_t size() const;        //# of internal vecs (including zero sized vecs)
+  bool empty() const { return !size(); }
+
   const ivec operator[](size_t);  //accessor for i'th internal vec
   const const_ivec operator[](size_t) const;  
   iterator begin();           //iterator over internal vecs
@@ -89,6 +91,8 @@ public:
   public:
     ivec(Packed_vecs<T> * pv, size_t index): i(index),  p(pv) {}
     size_t size() const { return p->sizes[i]; }
+    bool empty() const { return !size(); }
+
     typename vector<T>::iterator begin() const { return p->allVecs.begin()+p->offsets[i]; }
     typename vector<T>::iterator end() const { return begin()+p->sizes[i]; }
     T& operator[](size_t j) const { return p->allVecs[p->offsets[i]+j]; }
@@ -104,6 +108,7 @@ public:
     const_ivec(const Packed_vecs<T> *pv, size_t index): i (index), p (pv) {}
     const_ivec(ivec iv): p (iv.p), i (iv.i) {}
     size_t size() const { return p->sizes[i]; }
+    bool empty() const { return !size(); }
     typename vector<T>::const_iterator begin() const {
       return p->allVecs.cbegin()+p->offsets[i]; }
     typename vector<T>::const_iterator end() const {
@@ -241,14 +246,14 @@ inline void Packed_vecs<T>::rm_empty_vecs()
 }
 
 template <class T>
-inline Packed_vecs<T>::Packed_vecs(vector<vector <T> > init_vecs)
+inline Packed_vecs<T>::Packed_vecs(vector<vector <T>> init_vecs)
 {
   for(auto& item : init_vecs) 
     addVec(item);
 }
 
 template <class T>
-inline Packed_vecs<T>::Packed_vecs(std::initializer_list<vector<T> > ilist)
+inline Packed_vecs<T>::Packed_vecs(std::initializer_list<vector<T>> ilist)
 {
   for(auto& item: ilist)
     addVec(item);

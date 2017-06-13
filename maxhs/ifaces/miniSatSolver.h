@@ -99,7 +99,7 @@ public:
   void freeVar(Lit l);
   void printLit(Lit l) const;
   void invertVarActivities();
-  void pruneLearnts(MaxHS::MaxSolver *S);
+  void pruneLearnts();
   lbool modelValue(Lit p) const;
   lbool modelValue(Var x) const;
   lbool curVal(const Var x) const;
@@ -118,9 +118,7 @@ protected:
 	       int64_t confBudget, int64_t propBudget);
   lbool relaxSolve_(const vector<Lit>& assumps, const vector<Lit>& branchLits, 
 		    int64_t propBudget);
-
-
-  void analyzeFinal(Lit p, Minisat::LSet& out_conflict);
+  //void analyzeFinal(Lit p, Minisat::LSet& out_conflict);
   Lit pickBranchLit();
   void cancelUntil(int level);
   void ensure_mapping(const Var ex);
@@ -206,26 +204,22 @@ template <class S>
 bool miniSolver::findImplicationsIf(Lit p, vector<Lit>& imps, S pred) {
   imps.clear();
   if(!activeVar(var(p)))
-    return true;
-
-  auto a = ex2in(p);
-  trail_lim.push(trail.size());
-  if(value(a) == l_False) {
-    cancelUntil(0);
     return false;
-  }
-  else if (value(a) == l_Undef)
-    uncheckedEnqueue(a);
+
+  Lit a = ex2in(p);
+  trail_lim.push(trail.size());
+  uncheckedEnqueue(a);
   
   unsigned trail_before = trail.size();
   bool     ret          = true;
   if (propagate() == Minisat::CRef_Undef) {
     for (int j = trail_before; j < trail.size(); j++) 
       if( in2ex(trail[j]) != lit_Undef && (pred(in2ex(trail[j]))) )
-      imps.push_back(in2ex(trail[j]));
+	imps.push_back(in2ex(trail[j]));
   }
   else
     ret = false;
+
   cancelUntil(0);
   return ret;
 }

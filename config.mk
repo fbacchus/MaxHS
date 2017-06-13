@@ -1,8 +1,10 @@
 BUILD_DIR?=build
 MAXHS_RELSYM?=-g
 MAXHS_REL?=-O3 -D NDEBUG
-MAXHS_DEB?=-O0 -D DEBUG 
+MAXHS_DEB?=-O0 -D DEBUG -D_GLIBCXX_DEBUG -ggdb
 MAXHS_PRF?=-O3 -D NDEBUG
-CPLEXLIBDIR?=/w/63/fbacchus/CPlex1251/cplex/lib/x86-64_linux/static_pic
-CPLEXINCDIR?=/w/63/fbacchus/CPlex1251/cplex/include
-prefix?=/w/63/fbacchus/MaxSat/MaxHS
+LINUX_CPLEXLIBDIR?=/w/63/fbacchus/CPLEX_Studio127/cplex/lib/x86-64_linux/static_pic
+LINUX_CPLEXINCDIR?=/w/63/fbacchus/CPLEX_Studio127/cplex/include
+DARWIN_CPLEXLIBDIR?=/Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio127/cplex/lib/x86-64_osx/static_pic/
+DARWIN_CPLEXINCDIR?=/Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio127/cplex/include
+prefix?=/usr/local

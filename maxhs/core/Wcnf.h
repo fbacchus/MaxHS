@@ -33,7 +33,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "minisat/core/SolverTypes.h"
 #include "maxhs/ifaces/miniSatSolver.h"
 
-
 using std::cout;
 using Minisat::Lit;
 using Minisat::toInt;
@@ -46,6 +45,45 @@ using MaxHS_Iface::miniSolver;
 enum class MStype { undef, ms, pms, wms, wpms };
 
 class Bvars; //Bvars.h loads this header.
+
+class SC_mx {
+  /* The blits are such that if they are made
+     true the correesponding soft clause is
+     relaxed. Thus we incur the cost of
+     the soft clause.
+  */
+public:
+    SC_mx(vector<Lit> blits, bool is_core, Lit dlit)
+      : _blits { blits},
+        _dlit { dlit },
+        _is_core { is_core }
+    {}
+    //if is_core then
+    //  at most one of the blits can be true (at most one of the
+    //  corresponding soft clauses can be falsified)
+    //  and if dlit is true one of the blits is true.
+
+    //if !is_core then
+    //  at most one of the blits can be false (at most one of the
+    //  corresponding soft clauses can be satisfied)
+    //  and if dlit is false then one of the blits is false.
+
+    const vector<Lit>& soft_clause_lits() const { return _blits; }
+    bool is_core() const { return _is_core; }
+    Lit encoding_lit() const { return _dlit; }
+
+private:
+    vector<Lit> _blits;
+    Lit _dlit;
+    bool _is_core;
+};
+
+inline ostream& operator<<(ostream& os, const SC_mx& mx) {
+  os << (mx.is_core() ? "Core Mx: " : "Non-Core-Mx: ")
+     << "Defining Lit = " << mx.encoding_lit()
+     << " blits = " << mx.soft_clause_lits();
+  return os;
+}
 
 class Wcnf
 {
@@ -60,13 +98,15 @@ public:
   void set_dimacs_params(int nvars, int nclauses, Weight top = std::numeric_limits<Weight>::max());
   double parseTime() const { return parsing_time; }
   Weight dimacsTop() const { return dimacs_top; }
+  int dimacsNvars() const { return dimacs_nvars; }
 
   //api-support for adding hard or soft clauses
   void addHardClause(vector<Lit> &lits);
   void addSoftClause(vector<Lit> &lits, Weight w);
-
   void addHardClause(Lit p) { vector<Lit> tmp {p}; addHardClause(tmp); }
+  void addHardClause(Lit p, Lit q) { vector<Lit> tmp {p, q}; addHardClause(tmp); }
   void addSoftClause(Lit p, Weight w) { vector<Lit> tmp {p}; addSoftClause(tmp, w); }
+  void addSoftClause(Lit p, Lit q, Weight w) { vector<Lit> tmp {p, q}; addSoftClause(tmp, w); }
 
   //modify Wcnf. This might add new variables. But all variables
   //in the range 0--dimacs_nvars-1 are preserved. New variables
@@ -79,9 +119,10 @@ public:
 
   //print info
   void printFormulaStats();
-  void printSimplificationStats();
+  void printSimpStats();
   void printFormula(std::ostream& out = std::cout) const;
   void printFormula(Bvars&, std::ostream& out = std::cout) const;
+  void printDimacs(std::ostream& out = std::cout) const;
 
   //data setters and getters mainly for solver
   void rewriteModelToInput(vector<lbool>& ubmodel); //convert model to model of input formula
@@ -119,39 +160,52 @@ public:
   Weight maxSftWt() const { return wt_max; }
   int nDiffWts() const { return diffWts.size(); }
   const vector<Weight>& getDiffWts() { return diffWts; }
+  const vector<int>& getDiffWtCounts() { return diffWtCounts; }
+  const vector<Weight>& getTransitionWts() { return transitionWts; }
 
   MStype mstype() const { return ms_type; }
   Weight aveSftWt() const { return wt_mean; }
   Weight varSftWt() const { return wt_var; }
 
   bool isUnsat() { return unsat; }
+  bool integerWts() { return intWts; }
   const std::string& fileName() const { return instance_file_name; }
 
-  //mutexes...each mutex is a set of literals x such that either x or
-  //   -x is a unit soft clause. If x is a unit soft then the mutex is
-  //   a non-core Mutex (at most one of these soft clauses can be
-  //   satisfied. If -x is a unit soft then the mutex is a core mutex.
-
-  const vector<vector<Lit>>& getMxs() { return mutexes; }
-//  const vector<Var>& getMxDvars() { return mutexDvars; }
+  //mutexes
+  const vector<SC_mx>& get_SCMxs() const { return mutexes; }
+  int n_mxes() const { return mutexes.size(); }
+  const SC_mx& get_ith_mx(int i) const {return mutexes[i]; }
+  int ith_mx_size(int i) const {return mutexes[i].soft_clause_lits().size(); }
 
 private:
   bool inputDimacs(std::string filename, bool verify); 
-  void computeStats();
+  void update_maxorigvar(vector<Lit>& lits);
+  bool prepareClause(vector<Lit> & lits);
+  void _addHardClause(vector<Lit>& lits);
+  void _addHardClause(Lit p) { vector<Lit> tmp {p}; _addHardClause(tmp); }
+  void _addHardClause(Lit p, Lit q) { vector<Lit> tmp {p, q}; _addHardClause(tmp); }
+  void _addSoftClause(vector<Lit>& lits, Weight w);
+  void _addSoftClause(Lit p, Weight w) { vector<Lit> tmp {p}; _addSoftClause(tmp, w); }
+  void _addSoftClause(Lit p, Lit q, Weight w) { vector<Lit> tmp {p, q}; _addSoftClause(tmp, w); }
+  void computeWtInfo();
 
   //preprocessing routines
-  void subEqs();
+  bool subEqs();
+  vector<Lit> get_binaries(miniSolver& sat_solver);
+  vector<Lit> get_units();
+  Packed_vecs<Lit> reduce_by_eqs_and_units(Packed_vecs<Lit>& cls, bool softs, 
+                                           vector<vector<Lit>>& sccs, vector<Lit> units);
+  vector<vector<Lit>> binary_scc(vector<vector<Lit>>& edges);
   void remDupCls();
+  void simpleHarden();
   void rmUnits();
   void mxBvars();
   vector<vector<Lit>> mxFinder(Bvars&);
   void processMxs(vector<vector<Lit>>, Bvars&);
-  void addSoftClauseZeroWt(Lit p); //special for internal processing only
-
   Var maxOrigVar() const { return maxorigvar; }     //input variables
   size_t nOrigVars() const { return maxorigvar+1; } //are for private use.
 
-  Packed_vecs<Lit> reduceClauses(Packed_vecs<Lit>& cls, miniSolver& slv, bool softs);
+  Packed_vecs<Lit> reduce_by_units(Packed_vecs<Lit>& cls, miniSolver& slv, bool softs);
   int maxorigvar, maxvar;
   int dimacs_nvars;
   int dimacs_nclauses;
@@ -164,22 +218,14 @@ private:
   std::string instance_file_name;
   bool unsat;
   bool noDups;
+  bool intWts; 
   int nhard_units;
   vector<Weight> diffWts;
-  vector<lbool> tvals;
-  vector<Lit> eqLit;
-  void eqLitResize(int nVars);
-  Lit eqRoot(Lit l) { 
-    Lit x = l;
-    while(eqLit[toInt(x)] != x) 
-      x = eqLit[toInt(x)];
-    eqLit[toInt(l)] = x; //make another eqRoot(l) call more efficient
-    return x;
-  }
+  vector<int> diffWtCounts;
+  vector<Weight> transitionWts; //weights w s.t. sum of soft clauses with weight less that w is less than w
   Packed_vecs<Lit> hard_cls;
   Packed_vecs<Lit> soft_cls;
   vector<Weight> soft_clswts;
-  bool prepareClause(vector<Lit> & lits);
 
   struct ClsData {
     uint32_t index;
@@ -193,8 +239,7 @@ private:
   bool eqVecs(const ClsData& a, const ClsData& b);
 
   //mutexes
-  vector<vector<Lit>> mutexes;
-//  vector<Var> mutexDvars;
+  vector<SC_mx> mutexes;
 };
 
 #endif

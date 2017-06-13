@@ -20,6 +20,8 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include "minisat/mtl/Sort.h"
 #include "minisat/utils/Options.h"
 #include "minisat/utils/ParseUtils.h"
+#include <iostream>
+#include <string>
 
 using namespace Minisat;
 
@@ -90,3 +92,35 @@ void Minisat::printUsageAndExit (int /*argc*/, char** argv, bool verbose)
     exit(0);
 }
 
+void Minisat::printOptionSettings(const char* prefix, std::ostream& out) {
+    sort(Option::getOptionList(), Option::OptionLt());
+    const char* prev_cat {};
+    int n_opts {0};
+    bool at_new_line {true};
+    for(int i = 0; i < Option::getOptionList().size(); i++) {
+        auto option = Option::getOptionList()[i];
+        const char*  cat { option->category };
+        if(at_new_line)
+            out << prefix << " ";
+        if(prev_cat != cat) {
+            if(!at_new_line) out << "\n" << prefix << "\n" << prefix << " ";
+            else if(i && at_new_line) out << "\n" << prefix << " ";
+            out << cat << " Options\n" << prefix << " ";
+            n_opts = 0;
+        }
+        prev_cat = cat;
+        out << " ";
+        option->printSetting(out);
+        n_opts++;
+        if(i != Option::getOptionList().size()-1)
+            if(n_opts % 4 == 0) {
+                out << ",\n";
+                at_new_line = true;
+            }
+            else {
+                out << ",";
+                at_new_line = false;
+            }
+    }
+    out << "\n";
+}

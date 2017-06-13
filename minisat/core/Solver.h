@@ -155,8 +155,8 @@ protected:
 
     // Helper structures:
     //
-    struct VarData { CRef reason; int level; };
-    static inline VarData mkVarData(CRef cr, int l){ VarData d = {cr, l}; return d; }
+    struct VarData { CRef reason; int level; lbool isAssumed; };
+    static inline VarData mkVarData(CRef cr, int l, lbool a){ VarData d = {cr, l, a}; return d; }
 
     struct Watcher {
         CRef cref;
@@ -241,12 +241,13 @@ protected:
     void     insertVarOrder   (Var x);                                                 // Insert a variable in the decision order priority queue.
     virtual Lit      pickBranchLit    ();                                                      // Return the next decision variable.
     void     newDecisionLevel ();                                                      // Begins a new decision level.
-    virtual void     uncheckedEnqueue (Lit p, CRef from = CRef_Undef);                         // Enqueue a literal. Assumes value of literal is undefined.
+    void     uncheckedEnqueue (Lit p, CRef from = CRef_Undef);                         // Enqueue a literal. Assumes value of literal is undefined.
     bool     enqueue          (Lit p, CRef from = CRef_Undef);                         // Test if fact 'p' contradicts current state, enqueue otherwise.
     CRef     propagate        ();                                                      // Perform unit propagation. Returns possibly conflicting clause.
-    virtual void     cancelUntil      (int level);                                             // Backtrack until a certain level.
+    void     cancelUntil      (int level);                                             // Backtrack until a certain level.
     void     analyze          (CRef confl, vec<Lit>& out_learnt, int& out_btlevel);    // (bt = backtrack)
-    virtual void     analyzeFinal     (Lit p, LSet& out_conflict);                             // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
+    //virtual void     analyzeFinal     (Lit p, LSet& out_conflict);                             // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
+    void     analyzeFinal     (Lit p, LSet& out_conflict);                             // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
     bool     litRedundant     (Lit p);                                                 // (helper method for 'analyze()')
     lbool    search           (int nof_conflicts);                                     // Search for a given number of conflicts.
     lbool    solve_           ();                                                      // Main solve method (assumptions given in 'assumptions').
@@ -277,6 +278,14 @@ protected:
     uint32_t abstractLevel    (Var x) const; // Used to represent an abstraction of sets of decision levels.
     CRef     reason           (Var x) const;
     int      level            (Var x) const;
+//
+    lbool    isAssumed        (Var x) const;
+    bool     isAssumedTrue    (Lit p) const;
+    bool     isAssumedFalse   (Lit p) const;
+    void     setAssumption    (Lit p);
+    void     unsetAssumption  (Lit p);
+//
+    
     double   progressEstimate ()      const; // DELETE THIS ?? IT'S NOT VERY USEFUL ...
     bool     withinBudget     ()      const;
     void     relocAll         (ClauseAllocator& to);
@@ -302,6 +311,18 @@ protected:
 
 inline CRef Solver::reason(Var x) const { return vardata[x].reason; }
 inline int  Solver::level (Var x) const { return vardata[x].level; }
+
+//Assumptions
+inline lbool Solver::isAssumed(Var x) const { return vardata[x].isAssumed; }
+
+inline bool  Solver::isAssumedTrue(Lit p) const 
+    { return sign(p) ? isAssumed(var(p)) == l_False : isAssumed(var(p)) == l_True; }
+
+inline bool  Solver::isAssumedFalse(Lit p) const
+    { return sign(p) ? isAssumed(var(p)) == l_True : isAssumed(var(p)) == l_False; }
+
+inline void Solver::setAssumption(Lit p)   { vardata[var(p)].isAssumed = sign(p) ? l_False  : l_True; }
+inline void Solver::unsetAssumption(Lit p) { vardata[var(p)].isAssumed = l_Undef; }
 
 inline void Solver::insertVarOrder(Var x) {
     if (!order_heap.inHeap(x) && decision[x]) order_heap.insert(x); }

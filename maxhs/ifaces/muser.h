@@ -193,7 +193,7 @@ public:
   vector<Lit> addAmoUnk(vector<Lit>& unknowns);
   void addMoreCrits(vector<Lit>& conflict, int64_t propBudget);
   void preProcessConflict(vector<Lit>& conflict);
-  void analyzeFinal(Lit p, Minisat::LSet& out_conflict);
+  //void analyzeFinal(Lit p, Minisat::LSet& out_conflict);
   void setPropBudget(bool haveBudget, int64_t propBudget) {
     propagation_budget = haveBudget ? propBudget + propagations : -1;
   }

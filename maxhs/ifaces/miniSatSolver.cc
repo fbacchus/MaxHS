@@ -194,6 +194,8 @@ bool miniSolver::simplify()
 }
 
 
+//REMOVE FOR NOW
+#if 0
 void miniSolver::analyzeFinal(Lit p, LSet& out_conflict)
 {
   //Changes from original: stop resolving backwards when we hit an
@@ -259,6 +261,7 @@ void miniSolver::analyzeFinal(Lit p, LSet& out_conflict)
   printLit(in2ex(v[v.size()-1])); cout << "]\n";
   */
 }
+#endif
 
 bool miniSolver::findImplications(const vector<Lit> &assumps, vector<Lit>& imps)
 {
@@ -431,24 +434,18 @@ void miniSolver::invertVarActivities()
 }
 
 
-void miniSolver::pruneLearnts(MaxHS::MaxSolver *S) 
-//TODO: Not used right now but inefficient and not flexible
+void miniSolver::pruneLearnts() 
 {
   int i, j;
-  vector<Lit> exCls;
   for (i = j = 0; i < learnts.size(); i++){
     Clause& c = ca[learnts[i]];
-    exCls.clear();
-    for(int i = 0; i < c.size(); i++)
-      exCls.push_back(c[i]);
-    
-    if (!locked(c) && S->deleteLearntTest(exCls))
-            removeClause(learnts[i]);
-        else
-            learnts[j++] = learnts[i];
-    }
-    learnts.shrink(i - j);
-    checkGarbage();
+    if (!locked(c) && c.size() > 6) 
+      removeClause(learnts[i]);
+    else
+      learnts[j++] = learnts[i];
+  }
+  learnts.shrink(i - j);
+  checkGarbage();
 }
 
 lbool miniSolver::modelValue(const Lit p) const 

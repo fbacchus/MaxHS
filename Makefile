@@ -17,21 +17,19 @@ all: r lr
 ## Configurable options ###########################################################################
 
 ## Cplex library location (configure these variables with "make config")
+LINUX_CPLEXLIBDIR   ?= /w/63/fbacchus/CPLEX_Studio127/cplex/lib/x86-64_linux/static_pic
+LINUX_CPLEXINCDIR   ?= /w/63/fbacchus/CPLEX_Studio127/cplex/include
+##
+DARWIN_CPLEXLIBDIR   ?= /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio127/cplex/lib/x86-64_osx/static_pic/
+DARWIN_CPLEXINCDIR   ?= /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio127/cplex/include
 
 ifeq "$(shell uname)" "Linux"
-#cplex-12.6.1 (has a bug June 1 2015)
-#CPLEXLIBDIR   = /w/63/fbacchus/CPlex/cplex/lib/x86-64_linux/static_pic
-#CPLEXINCDIR   = /w/63/fbacchus/CPlex/cplex/include
-#cplex-12.5.1 (slower but no bugs detected)
-#CPLEXLIBDIR   = /pkgs/ilog/cplex125/cplex/lib/x86-64_sles10_4.1/static_pic
-#CPLEXINCDIR   = /pkgs/ilog/cplex125/cplex/include
-CPLEXLIBDIR   = /w/63/fbacchus/CPLEX_Studio1263/cplex/lib/x86-64_linux/static_pic
-CPLEXINCDIR   = /w/63/fbacchus/CPLEX_Studio1263/cplex/include
+CPLEXLIBDIR   =$(LINUX_CPLEXLIBDIR)
+CPLEXINCDIR   =$(LINUX_CPLEXINCDIR)
 endif
-
 ifeq "$(shell uname)" "Darwin"
-CPLEXLIBDIR   = /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio1251/cplex/lib/x86-64_osx/static_pic/
-CPLEXINCDIR   = /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio1251/cplex/include
+CPLEXLIBDIR   =$(DARWIN_CPLEXLIBDIR)
+CPLEXINCDIR   =$(DARWIN_CPLEXINCDIR)
 endif
 
 # Directory to store object files, libraries, executables, and dependencies:
@@ -42,7 +40,7 @@ MAXHS_RELSYM ?= -g
 
 # Sets of compile flags for different build types
 MAXHS_REL    ?= -O3 -D NDEBUG
-MAXHS_DEB    ?= -O0 -D DEBUG 
+MAXHS_DEB    ?= -O0 -D DEBUG -D_GLIBCXX_DEBUG -ggdb
 MAXHS_PRF    ?= -O3 -D NDEBUG
 
 # GNU Standard Install Prefix
@@ -56,8 +54,10 @@ config:
 	   echo 'MAXHS_REL?=$(MAXHS_REL)'       ; \
 	   echo 'MAXHS_DEB?=$(MAXHS_DEB)'       ; \
 	   echo 'MAXHS_PRF?=$(MAXHS_PRF)'       ; \
-	   echo 'CPLEXLIBDIR?=$(CPLEXLIBDIR)'   ; \
-	   echo 'CPLEXINCDIR?=$(CPLEXINCDIR)'       ; \
+	   echo LINUX_CPLEXLIBDIR?=$(LINUX_CPLEXLIBDIR) ; \
+	   echo LINUX_CPLEXINCDIR?=$(LINUX_CPLEXINCDIR) ; \
+	   echo DARWIN_CPLEXLIBDIR?=$(DARWIN_CPLEXLIBDIR) ; \
+	   echo DARWIN_CPLEXINCDIR?=$(DARWIN_CPLEXINCDIR) ; \
 	   echo 'prefix?=$(prefix)'                 ) > config.mk
 
 ## Configurable options end #######################################################################
@@ -81,7 +81,7 @@ MAXHS_SLIB = lib$(MAXHS).a#  Name of Maxhs static library.
 MAXHS_CXXFLAGS = -DIL_STD -I. -I$(CPLEXINCDIR)
 MAXHS_CXXFLAGS += -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS 
 MAXHS_CXXFLAGS += -Wall -Wno-parentheses -Wextra -Wno-deprecated
-MAXHS_CXXFLAGS += -std=c++0x
+MAXHS_CXXFLAGS += -std=c++11
 
 MAXHS_LDFLAGS  = -Wall -lz -L$(CPLEXLIBDIR) -lcplex -lpthread
 

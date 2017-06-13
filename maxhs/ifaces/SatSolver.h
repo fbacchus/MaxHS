@@ -131,6 +131,8 @@ namespace MaxHS_Iface {
     lbool solveBudget(double timeLimit)
       { vector<Lit> tc; return solveBudget(vector<Lit>{}, tc, timeLimit); }
 
+    lbool solvePropBudget(int64_t propBudget)
+      { vector<Lit> tc; return solveBudget(vector<Lit>{}, tc, -1, propBudget); }
 
     lbool solve(const vector<Lit> & assumps)
       { vector<Lit> tc; return solve(assumps, tc); }
@@ -176,8 +178,7 @@ namespace MaxHS_Iface {
 
     virtual bool findImplications(const vector<Lit> &assumps, vector<Lit>& imps) = 0;
     virtual bool findImplications(const Lit p, vector<Lit>& imps) {
-      return findImplications({p}, imps); }
-
+      vector<Lit> tmp {p}; return findImplications(tmp, imps); }
 
     virtual vector<Lit> getForced(int index) = 0; 
 
@@ -235,7 +236,7 @@ namespace MaxHS_Iface {
     virtual void invertVarActivities() = 0;
     
     //prune learnts 
-    virtual void pruneLearnts(MaxHS::MaxSolver *S) = 0;
+    virtual void pruneLearnts() = 0;
     
     //obtain truth assignments of last model found by SAT solver.
     //The SAT solver will only set those variables it has been given, so
@@ -281,4 +282,4 @@ namespace MaxHS_Iface {
   
 } //namespace
 
-#endif 
+#endif

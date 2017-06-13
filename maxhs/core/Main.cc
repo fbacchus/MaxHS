@@ -49,8 +49,8 @@ static void SIGINT_exit(int signum) {
     }
 }
 
-const int majorVer {2};
-const int minorVer {9};
+const int majorVer {3};
+const int minorVer {0};
 const int update {0};
 
 int main(int argc, char** argv) {
@@ -62,19 +62,24 @@ int main(int argc, char** argv) {
     _FPU_GETCW(oldcw); newcw = (oldcw & ~_FPU_EXTENDED) | _FPU_DOUBLE; _FPU_SETCW(newcw);
 #endif
     
-    IntOption    cpu_lim("MAIN", "cpu-lim","Limit on CPU time allowed in seconds.\n", INT32_MAX, IntRange(0, INT32_MAX));
-    IntOption    mem_lim("MAIN", "mem-lim","Limit on memory usage in megabytes.\n", INT32_MAX, IntRange(0, INT32_MAX));
-    BoolOption   version("MAIN", "version", "Print version number and exit", false);
+    IntOption    cpu_lim("A: General MaxHS", "cpu-lim","Limit on CPU time allowed in seconds.\n", INT32_MAX, IntRange(0, INT32_MAX));
+    IntOption    mem_lim("A: General MaxHS", "mem-lim","Limit on memory usage in megabytes.\n", INT32_MAX, IntRange(0, INT32_MAX));
+    BoolOption   version("A: General MaxHS", "version", "Print version number and exit", false);
     
     parseOptions(argc, argv, true);
     params.readOptions();
-
     if(version) {
       cout << "MaxHS " << majorVer << "." << minorVer << "." << update << "\n";
       return(0);
     }
     cout << "c MaxHS " << majorVer << "." << minorVer << "." << update << "\n";
-    
+    cout << "c Instance: " << argv[argc-1] << "\n";
+    cout << "c Parameter Settings\n";
+    cout << "c ============================================\n";
+    printOptionSettings("c ", cout);
+    cout << "c ============================================\n";
+    cout << "c\n";
+
     signal(SIGINT, SIGINT_exit);
     signal(SIGXCPU, SIGINT_exit);
     signal(SIGSEGV, SIGINT_exit);

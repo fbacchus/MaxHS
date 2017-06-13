@@ -21,6 +21,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
+
 #ifndef ASSUMPTIONS_h
 #define ASSUMPTIONS_h
 
@@ -39,21 +40,27 @@ using Minisat::lbool;
 class Assumps {
   //MaxSolver helper class
 public:
-//  Assumps(MaxHS_Iface::SatSolver* s, Bvars& b, vector<uint8_t>& mx) : satsolver{s}, bvars (b), inMx (mx) {
   Assumps(MaxHS_Iface::SatSolver* s, Bvars& b) : satsolver{s}, bvars (b) {
-    map.resize(bvars.n(), -1); }
+    map.resize(bvars.n_bvars(), -1); }
   ~Assumps() {}
-  void init(const vector<Lit>& ivals, CoreType ctype); 
-  void initAllSofts();
+  //initialize assumptions to make all softs true, or set of passed softs
+  void init(const vector<Lit>& ivals, CoreType ctype);
+  void all_softs_true();
+
+  //update requires that lits in conflict currently appear negated in
+  //assumptions Warns this is not the case.
+  //exclude ensures these variables corresponding to these lits are
+  //not part of assumption
   void update(const vector<Lit>& conflict, bool remove);
-  void remove(const vector<Lit>& conflict);
-  void flip(const vector<Lit>& conflict);
+  void exclude(const vector<Lit>& ex);
+
   const vector<Lit>& vec() const { return assumps; }
   template <class Compare>
-  void sort(Compare comp) {
+    void sort(Compare comp) {
     std::sort(assumps.begin(), assumps.end(), comp);
     setMap();
   }
+  friend ostream& operator<<(ostream& os, const Assumps& a);
 
 private:
   vector<Lit> assumps;
@@ -64,34 +71,31 @@ private:
 //  const uint8_t inMxbvar = 1;
 //  vector<uint8_t>& inMx;
 //
+  void remove(const vector<Lit>& conflict);
+  void flip(const vector<Lit>& conflict);
   void clearIndex(Lit l) {
     map[bvars.toIndex(var(l))] = -1;
   }
   int getIndex(Lit l) {
     return map[bvars.toIndex(var(l))];
   }
-      
-  void clearMap() {
-    for(size_t i = 0; i < map.size(); i++)
-      map[i] = -1;
-  }
   void setMap() {
-    clearMap();
-    for(size_t i = 0; i < assumps.size(); i++) 
-      map[bvars.toIndex(var(assumps[i]))] = i;
+    std::fill(map.begin(), map.end(), -1);
+      for(size_t i = 0; i < assumps.size(); i++)
+        map[bvars.toIndex(var(assumps[i]))] = i;
   }
-  void checkUpdate(Lit l) {
-    if(getIndex(l) < 0) 
+  bool checkUpdate(Lit l) {
+    if(getIndex(l) < 0) {
       cout << "c ERROR tried to update literal not in assumptions\n";
-    if(assumps[getIndex(l)] != ~l) 
-      cout << "c WARNING conflict agrees with assumption---no real update being done\n";
+      return false;
+    }
+    return true;
   }
-//  bool dVar(Lit b) {
-//    return (static_cast<size_t>(bvars.toIndex(b)) < inMx.size() && inMx[bvars.toIndex(b)] == inMxdvar);
-//  }
-//  bool bVarInMx(Lit b) {
-//    return (static_cast<size_t>(bvars.toIndex(b)) < inMx.size() && inMx[bvars.toIndex(b)] == inMxbvar);
-//  }
 };
+
+inline ostream& operator<<(ostream& os, const Assumps& a) {
+  os << a.assumps;
+  return os;
+}
 
 #endif

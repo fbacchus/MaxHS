@@ -34,6 +34,7 @@ public:
   Params();
   ~Params() {}
   void readOptions();
+  void printOptions();
   int verbosity;
   int mverbosity;
   const double noLimit;
@@ -49,19 +50,22 @@ public:
   bool fb;
   bool printBstSoln;
   bool printSoln;
+  double tolerance;
 
   CoreType coreType;
   CoreRelaxFn coreRelaxFn;
 
-  SeedType seedType;
+  int seed_type;
   int seed_max;
   bool seed_learnts;
+  int seed_all_limit;
   bool bvarDecisions;
   double frac_to_relax;
   int frac_rampup_start;
   int frac_rampup_end;
   int max_cores_before_cplex;
   int max_cpu_before_cplex;
+  bool lp_harden;
 
   int sort_assumps;
   bool bestmodel_mipstart;
@@ -75,23 +79,36 @@ public:
   bool find_forced;
 
   int cplex_threads;
+  bool cplex_tune;
   bool cplex_data_chk;
   bool cplex_write_model;
   bool cplex_output;
 
   int cplex_pop_nsoln;
   double cplex_pop_cpu_lim;
+  //int cplex_solnpool_cap;
 
   //double trypop_cplextime_ub;
   //double trypop_feedtime_lb;
   int trypop;
-  
+  int conflicts_from_ub;
   bool prepro_output;
   bool preprocess;
   bool wcnf_eqs;
+  bool wcnf_harden;
   bool wcnf_units;
-  bool wcnf_mx_bvars;
-  double wcnf_mx_cpu_lim;
+
+  bool simplify_and_exit;
+  int mx_find_mxes;
+  int mx_mem_limit;
+  int mx_transform;
+  bool mx_seed_originals;
+
+  bool mx_constrain_hs;
+  int mx_hs_use_abstraction;
+  bool mx_sat_preprocess;
+  double mx_cpu_lim;
+
   std::string instance_file_name;
 };
 

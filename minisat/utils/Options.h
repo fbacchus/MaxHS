@@ -24,6 +24,7 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
+#include <iostream>
 
 #include "minisat/mtl/IntTypes.h"
 #include "minisat/mtl/Vec.h"
@@ -39,7 +40,7 @@ extern void parseOptions     (int& argc, char** argv, bool strict = false);
 extern void printUsageAndExit(int  argc, char** argv, bool verbose = false);
 extern void setUsageHelp     (const char* str);
 extern void setHelpPrefixStr (const char* str);
-
+extern void printOptionSettings(const char* prefix, std::ostream& out);
 
 //==================================================================================================
 // Options is an abstract class that gives the interface for all types options:
@@ -81,11 +82,14 @@ class Option
 
     virtual bool parse             (const char* str)      = 0;
     virtual void help              (bool verbose = false) = 0;
+    virtual void printSetting      (std::ostream& out) = 0;
 
     friend  void parseOptions      (int& argc, char** argv, bool strict);
     friend  void printUsageAndExit (int  argc, char** argv, bool verbose);
     friend  void setUsageHelp      (const char* str);
     friend  void setHelpPrefixStr  (const char* str);
+    friend  void printOptionSettings(const char* prefix, std::ostream& out);
+
 };
 
 
@@ -171,6 +175,9 @@ class DoubleOption : public Option
             fprintf(stderr, "\n");
         }
     }
+    virtual void printSetting(std::ostream& out) {
+        out << name << " = " << value;
+    }
 };
 
 
@@ -234,6 +241,9 @@ class IntOption : public Option
             fprintf(stderr, "\n");
         }
     }
+    virtual void printSetting(std::ostream& out) {
+        out << name << " = " << value;
+    }
 };
 
 
@@ -290,11 +300,14 @@ class Int64Option : public Option
         else
             fprintf(stderr, "%4" PRIi64, range.end);
 
-        fprintf(stderr, "] (default: %" PRIi64 ")\n", value);
+        fprintf(stderr, "] (default: %" PRIi64")\n", value);
         if (verbose){
             fprintf(stderr, "\n        %s\n", description);
             fprintf(stderr, "\n");
         }
+    }
+    virtual void printSetting(std::ostream& out) {
+        out << name << " = " << value;
     }
 };
 #endif
@@ -330,7 +343,11 @@ class StringOption : public Option
             fprintf(stderr, "\n        %s\n", description);
             fprintf(stderr, "\n");
         }
-    }    
+    }
+
+    virtual void printSetting(std::ostream& out) {
+        out << name << " = " << value;
+    }
 };
 
 
@@ -378,6 +395,11 @@ class BoolOption : public Option
             fprintf(stderr, "\n");
         }
     }
+
+    virtual void printSetting(std::ostream& out) {
+        out << name << " = " << (value ? "true" : "false");
+    }
+
 };
 
 //=================================================================================================

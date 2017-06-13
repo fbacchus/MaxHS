@@ -23,6 +23,8 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 #include "minisat/mtl/Vec.h"
 #include "minisat/mtl/IntMap.h"
+#include <iostream>
+using std::cout;
 
 namespace Minisat {
 
@@ -157,6 +159,17 @@ class Heap {
         for (int i = 0; i < heap.size(); i++)
             indices[heap[i]] = -1;
         heap.clear(dispose); 
+    }
+
+    bool check()
+    {
+        for(int i = 1; i < heap.size(); i++)
+            if(!lt(heap[parent(i)], heap[i])) {
+                cout << "HEAP ERROR " << i << ", " << parent(i)
+                << " lt = " << lt(heap[parent(i)], heap[i]) << "\n";
+                return false;
+            }
+        return true;
     }
 };
 
