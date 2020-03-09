@@ -33,6 +33,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "maxhs/utils/io.h"
 #include "maxhs/core/MaxSolverTypes.h"
 
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
+
 using Minisat::Lit;
 using Minisat::var;
 using Minisat::lbool;

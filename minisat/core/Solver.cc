@@ -19,14 +19,15 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 **************************************************************************************************/
 
 #include <math.h>
-
+#include <iostream>
+#include "maxhs/utils/io.h"
 #include "minisat/mtl/Alg.h"
 #include "minisat/mtl/Sort.h"
 #include "minisat/utils/System.h"
 #include "minisat/core/Solver.h"
 
 using namespace Minisat;
-
+using std::cout;
 //=================================================================================================
 // Options:
 
@@ -46,6 +47,9 @@ static DoubleOption  opt_restart_inc       (_cat, "rinc",        "Restart interv
 static DoubleOption  opt_garbage_frac      (_cat, "gc-frac",     "The fraction of wasted memory allowed before a garbage collection is triggered",  0.20, DoubleRange(0, false, HUGE_VAL, false));
 static IntOption     opt_min_learnts_lim   (_cat, "min-learnts", "Minimum learnt clause limit",  0, IntRange(0, INT32_MAX));
 static IntOption     opt_sat_verb          (_cat, "sverb",   "Verbosity level (0=silent, 1=some, 2=more).", 0, IntRange(0, 2));
+static IntOption     opt_assump_verb       (_cat, "averb",   "Verbosity level for new assumption processing (0=silent, 1=some, 2=more).", 0, IntRange(0, 2));
+static BoolOption    opt_assumption_2nd (_cat, "assump-reprocess", "Reprocess assumption conflict with separate assumption decision levels", true);
+
 
 //=================================================================================================
 // Constructor/Destructor:
@@ -56,51 +60,54 @@ Solver::Solver() :
     // Parameters (user settable):
     //
     verbosity        (opt_sat_verb)
-  , var_decay        (opt_var_decay)
-  , clause_decay     (opt_clause_decay)
-  , random_var_freq  (opt_random_var_freq)
-  , random_seed      (opt_random_seed)
-  , luby_restart     (opt_luby_restart)
-  , ccmin_mode       (opt_ccmin_mode)
-  , phase_saving     (opt_phase_saving)
-  , rnd_pol          (false)
-  , rnd_init_act     (opt_rnd_init_act)
-  , garbage_frac     (opt_garbage_frac)
-  , min_learnts_lim  (opt_min_learnts_lim)
-  , restart_first    (opt_restart_first)
-  , restart_inc      (opt_restart_inc)
+    , var_decay        (opt_var_decay)
+    , clause_decay     (opt_clause_decay)
+    , random_var_freq  (opt_random_var_freq)
+    , random_seed      (opt_random_seed)
+    , luby_restart     (opt_luby_restart)
+    , assump_2nd_process (opt_assumption_2nd)
+    , averbosity       (opt_assump_verb)
+    , ccmin_mode       (opt_ccmin_mode)
+    , phase_saving     (opt_phase_saving)
+    , rnd_pol          (false)
+    , rnd_init_act     (opt_rnd_init_act)
+    , garbage_frac     (opt_garbage_frac)
+    , min_learnts_lim  (opt_min_learnts_lim)
+    , restart_first    (opt_restart_first)
+    , restart_inc      (opt_restart_inc)
 
     // Parameters (the rest):
     //
-  , learntsize_factor((double)1/(double)3), learntsize_inc(1.1)
+    , learntsize_factor((double)1/(double)3), learntsize_inc(1.1)
 
     // Parameters (experimental):
     //
-  , learntsize_adjust_start_confl (100)
-  , learntsize_adjust_inc         (1.5)
+    , learntsize_adjust_start_confl (100)
+    , learntsize_adjust_inc         (1.5)
 
     // Statistics: (formerly in 'SolverStats')
     //
-  , solves(0), starts(0), decisions(0), rnd_decisions(0), propagations(0), conflicts(0)
-  , dec_vars(0), num_clauses(0), num_learnts(0), clauses_literals(0), learnts_literals(0), max_literals(0), tot_literals(0)
-
-  , watches            (WatcherDeleted(ca))
-  , order_heap         (VarOrderLt(activity))
-  , ok                 (true)
-  , cla_inc            (1)
-  , var_inc            (1)
-  , qhead              (0)
-  , simpDB_assigns     (-1)
-  , simpDB_props       (0)
-  , progress_estimate  (0)
-  , remove_satisfied   (true)
-  , next_var           (0)
+    , solves(0), starts(0), decisions(0), rnd_decisions(0), propagations(0), conflicts(0)
+    , dec_vars(0), num_clauses(0), num_learnts(0), clauses_literals(0), learnts_literals(0), max_literals(0), tot_literals(0)
+    , n_assump_conflicts(0)
+    , assump_saved (0)
+    , watches            (WatcherDeleted(ca))
+    , order_heap         (VarOrderLt(activity))
+    , ok                 (true)
+    , remove_satisfied   (true)
+    , cla_inc            (1)
+    , var_inc            (1)
+    , qhead              (0)
+    , simpDB_assigns     (-1)
+    , simpDB_props       (0)
+    , progress_estimate  (0)
+    , next_var           (0)
 
     // Resource constraints:
     //
-  , conflict_budget    (-1)
-  , propagation_budget (-1)
-  , asynch_interrupt   (false)
+    , conflict_budget    (-1)
+    , propagation_budget (-1)
+    , asynch_interrupt   (false)
 {}
 
 
@@ -157,14 +164,14 @@ bool Solver::addClause_(vec<Lit>& ps)
     if (!ok) return false;
 
     // Check if clause is satisfied and remove false/duplicate literals:
-     sort(ps);
-     Lit p; int i, j;
-     for (i = j = 0, p = lit_Undef; i < ps.size(); i++)
-         if (value(ps[i]) == l_True || ps[i] == ~p)
-             return true;
-         else if (value(ps[i]) != l_False && ps[i] != p)
-             ps[j++] = p = ps[i];
-     ps.shrink(i - j);
+    sort(ps);
+    Lit p; int i, j;
+    for (i = j = 0, p = lit_Undef; i < ps.size(); i++)
+        if (value(ps[i]) == l_True || ps[i] == ~p)
+            return true;
+        else if (value(ps[i]) != l_False && ps[i] != p)
+            ps[j++] = p = ps[i];
+    ps.shrink(i - j);
 
     if (ps.size() == 0)
         return ok = false;
@@ -266,9 +273,8 @@ Lit Solver::pickBranchLit()
     // Choose polarity based on different polarity modes (global or per-variable):
     if (next == var_Undef)
         return lit_Undef;
-    else if (user_pol[next] != l_Undef) {
+    else if (user_pol[next] != l_Undef)
         return mkLit(next, user_pol[next] == l_True);
-    }
     else if (rnd_pol)
         return mkLit(next, drand(random_seed) < 0.5);
     else
@@ -277,22 +283,22 @@ Lit Solver::pickBranchLit()
 
 
 /*_________________________________________________________________________________________________
-|
-|  analyze : (confl : Clause*) (out_learnt : vec<Lit>&) (out_btlevel : int&)  ->  [void]
-|
-|  Description:
-|    Analyze conflict and produce a reason clause.
-|
-|    Pre-conditions:
-|      * 'out_learnt' is assumed to be cleared.
-|      * Current decision level must be greater than root level.
-|
-|    Post-conditions:
-|      * 'out_learnt[0]' is the asserting literal at level 'out_btlevel'.
-|      * If out_learnt.size() > 1 then 'out_learnt[1]' has the greatest decision level of the
-|        rest of literals. There may be others from the same level though.
-|
-|________________________________________________________________________________________________@*/
+  |
+  |  analyze : (confl : Clause*) (out_learnt : vec<Lit>&) (out_btlevel : int&)  ->  [void]
+  |
+  |  Description:
+  |    Analyze conflict and produce a reason clause.
+  |
+  |    Pre-conditions:
+  |      * 'out_learnt' is assumed to be cleared.
+  |      * Current decision level must be greater than root level.
+  |
+  |    Post-conditions:
+  |      * 'out_learnt[0]' is the asserting literal at level 'out_btlevel'.
+  |      * If out_learnt.size() > 1 then 'out_learnt[1]' has the greatest decision level of the
+  |        rest of literals. There may be others from the same level though.
+  |
+  |________________________________________________________________________________________________@*/
 void Solver::analyze(CRef confl, vec<Lit>& out_learnt, int& out_btlevel)
 {
     int pathC = 0;
@@ -443,106 +449,265 @@ bool Solver::litRedundant(Lit p)
     return true;
 }
 
+/*----------------------------------------------------------------------------------------
+  analyzeFinal. These are special versions of analyze designed to compute a conflict over
+  the assumptions. That is a conflict clause containing only negated assumption literals.
+
+  In search, analyzeFinal is called in two places. First to compute a conflict when all
+  assumptions have been set as decisions at level 1, and second to recompute (reprocess)
+  a conflict when assumptions as decisions at separate levels.
+
+  The basic assumption is that all non-implied literals on the trail
+  are positive assumption literals.
+
+  There are options
+  1. All decision conflict---does not seem to perform as well
+  2. keep all negative assumption literals in the conflict (never resolve these away)
+     this performs better but on conflict reprocess this can yield a longer conflict
+     than the original
+  3. all-uip conflict.
+
+  Note that if all assumptions are set first at decision level 1, then all the above
+  conflicts are the same. Also the all-uip code does not handle the case
+  when all assumptions are made at the same level 1 (messes up the counts per level).
+
+  Thus we have different versions.
+---------------------------------------------------------------------------------------*/
+
+/*_________________________________________________________________________________________________
+  |
+  |  analyzeFinal1 : (confl : CRef)  ->  [void]
+  |
+  |  Description:
+  |    -handles all assumptions at level 1.
+  |    -computes conflict of type 2.
+  ____________________________________________________________________________________________*/
+
+inline void Solver::af1_mark_conflict(CRef confl, bool atZero, int &n_toR, LSet& out_conflict) {
+    //helper for analyzeFinal1--marks literals in conflict, adding some to out_conflict
+    Clause& c = ca[confl];
+    for (int i = (atZero ? 0 : 1); i < c.size(); i++) {
+        Lit l = c[i]; Var y = var(l);
+        if(level(y) == 0 || seen[y]) //level zero lits not needed, skip already processed
+            continue;
+        if(reason(y) == CRef_Undef || isAssumedFalse(l)) {
+            out_conflict.insert(l);
+            assert(isAssumedFalse(l));
+            seen[y] = 2;
+        }
+        else { //must resolve later
+            seen[y] = 1;
+            ++n_toR;
+        }
+    }
+}
+
+void Solver::analyzeFinal1(CRef confl, LSet& out_conflict)
+{
+    out_conflict.clear();
+    if (decisionLevel() == 0)
+        return;
+    int n_toR {0}; //keep track of number of ltierals still to resolve.
+    assert(decisionLevel() >= 1);
+
+    //uses seen markers to store the literals that need to be resolved
+    //out of the conflict. Also uses seen markers to ensure that duplicate
+    //lits not added to out_conflict.
+
+    af1_mark_conflict(confl, true, n_toR, out_conflict);
+    //now do resolutions required to obtain final conflict.
+    for (int i = trail.size()-1;  n_toR > 0 && i >= trail_lim[0]; i--) {
+        Var x = var(trail[i]);
+        if(seen[x]) {
+            if(seen[x] == 1) {
+                //x has a reason and to be resolved away.
+                --n_toR;
+                af1_mark_conflict(reason(x), false, n_toR, out_conflict);
+            }
+            seen[x] = 0;
+        }
+    }
+    //because of terminating when n_toR == 0, we might not have cleared seen for some literals in out_conflict.
+    for(int i=0; i < out_conflict.size(); i++)
+        seen[var(out_conflict[i])] = 0;
+}
 
 /*_________________________________________________________________________________________________
 |
-|  analyzeFinal : (p : Lit)  ->  [void]
+|  analyzeFinal1 : (p : Lit)  ->  [void]
 |
 |  Description:
-|    Specialized analysis procedure to express the final conflict in terms of assumptions.
-|    Calculates the (possibly empty) set of assumptions that led to the assignment of 'p', and
-|    stores the result in 'out_conflict'.
+|    Search has found a forced falsified assumption literal p.
+|    Hence, given a NEGATED ASSUMPTION LITERAL p we compute a reason A -> p where A contains only positive
+|    assumption literals. The result is a clause (-A\/p) consisting only of negated assumptions.
+|    Requires at all decisions (non-implied literals on the trail) are postive assumption literals.
 |________________________________________________________________________________________________@*/
-void Solver::analyzeFinal(Lit p, LSet& out_conflict)
-{
 
-  if (decisionLevel() == 0) {
+void Solver::analyzeFinal1(Lit p, LSet& out_conflict)
+{
     out_conflict.clear();
     out_conflict.insert(p);
-    return;
-  }
+    if (decisionLevel() == 0 || reason(var(p)) == CRef_Undef)
+        return;
+    int n_toR {0};  //keep track of number of literals still to resolve
 
-  vec<Lit> confl;
-  confl.push(p);
+    //if p is implied we need its reason as the start of A.
+    af1_mark_conflict(reason(var(p)), false, n_toR, out_conflict);
 
-  seen[var(p)] = 1;
-  for (int i = trail.size()-1; i >= trail_lim[0]; i--){
-    Var x = var(trail[i]);
-    if (seen[x]){
-      if (reason(x) == CRef_Undef || isAssumedTrue(trail[i])){
-	assert(level(x) > 0);
-	confl.push(~trail[i]);
-      }else{
-	seen[x] = 0;
-	Clause& c = ca[reason(x)];
-	for (int j = 1; j < c.size(); j++)
-	  if (level(var(c[j])) > 0)
-	    seen[var(c[j])] = 1;
-      }
+    //now do resolutions required to obtain final conflict.
+    for (int i = trail.size()-1; n_toR > 0 && i >= trail_lim[0]; i--) {
+        Var x = var(trail[i]);
+        if (seen[x]) { //resolve away x
+            if(seen[x] == 1) {
+                //x has a reason and to be resolved away.
+                --n_toR;
+                af1_mark_conflict(reason(x), false, n_toR, out_conflict);
+            }
+            seen[x] = 0;
+        }
     }
-  }
-  seen[var(p)] = 0;
-
-#if 0
-  //DEBUG
-  for(int k=0; k < confl.size(); k++) {
-    Lit q = confl[k];
-    if(k==0 && seen[var(q)])
-      printf("AF: seen marked at confl[0]\n");
-    if(k!=0 && !seen[var(q)])
-      printf("AF: seen not marked at confl[k] (k>0)\n");
-    seen[var(q)] = 0;
-  }
-
-  for(Var v=0; v< nVars(); v++)
-    if(seen[v])
-      printf("AF: SEEN not cleared\n");
-
-  for(int k=1; k < confl.size(); k++) {
-    Lit q = confl[k];
-    seen[var(q)] = 1;
-  }
-  //DEBUG
-#endif
-
-  confl.copyTo(analyze_toclear);
-  int i, j;
-  for(i=j=1; i < confl.size(); i++)
-    if(reason(var(confl[i])) == CRef_Undef || !litRedundant(confl[i]))
-      confl[j++] = confl[i];
-
-  confl.shrink(i-j);
-  //if(i-j > 0)
-  //printf("AF: litRedundant removed %d\n", i-j);
-
-  out_conflict.clear();
-  for(int k=0; k < confl.size(); k++)
-    out_conflict.insert(confl[k]);
-
-  for (int j = 0; j < analyze_toclear.size(); j++) seen[var(analyze_toclear[j])] = 0;
+    //because of terminating when n_toR == 0, we might not have cleared seen for some literals in out_conflict.
+    for(int i=0; i < out_conflict.size(); i++)
+        seen[var(out_conflict[i])] = 0;
 }
 
+/* analyzeFinal2 These versions compute all-UIP clause. So resulting conflict from
+   reprocessing cannot be any bigger. However, they currently won't work with
+   all assumptions at level 1. So only use when reprocessing the assumption.
+*/
+
+inline void Solver::af2_mark_conflict(CRef confl, bool atZero, int &n_toR,
+                                      vec<int>& n_atLevel, LSet& out_conflict) {
+    //helper for analyzeFinal2--marks literals in conflict, adding some to out_conflict
+    Clause& c = ca[confl];
+    for(int i = (atZero ? 0 : 1); i < c.size(); i++) {
+        Lit l = c[i]; Var y = var(l);
+        if(level(y) == 0 || seen[y])
+            continue;
+        if(reason(y) == CRef_Undef) {
+            out_conflict.insert(l);
+            assert(isAssumedFalse(l));
+            seen[y] = 2;
+            ++n_atLevel[level(y)];
+        }
+        else { //must check later to see if to be resolved
+            seen[y] = 1;
+            ++n_toR;
+            ++n_atLevel[level(y)];
+        }
+    }
+}
+
+/*_________________________________________________________________________________________________
+|
+|  analyzeFinal2 : (p : Lit)  ->  [void]
+|________________________________________________________________________________________________@*/
+void Solver::analyzeFinal2(Lit p, LSet& out_conflict)
+{
+    out_conflict.clear();
+    out_conflict.insert(p);
+    if (decisionLevel() == 0 || reason(var(p)) == CRef_Undef) //(p) is the conflict
+        return;
+    int n_toR {0};  //keep track of number of literals still to resolve
+    vec<int> n_atLevel (decisionLevel() + 1, 0); //n of lit in conflict at decision level.
+
+    //if p is implied we need its reason as the start of A.
+    af2_mark_conflict(reason(var(p)), false, n_toR, n_atLevel, out_conflict);
+
+    //Now climb up trail materalizing conflict from seen markers---updating seen markers
+    //as we do resolution steps.
+    for (int i = trail.size()-1; n_toR > 0 && i >= trail_lim[0]; i--) {
+        Lit l = trail[i]; Var y = var(l);
+        if (seen[y]) {
+            if(seen[y] == 1) {
+                if(!isAssumedTrue(l) || n_atLevel[level(y)] > 1) {
+                    //~l is not a negated assumption, or we have more than one at this level.
+                    //so we must resolve it away.
+                    af2_mark_conflict(reason(y), false, n_toR, n_atLevel, out_conflict);
+                }
+                else { //~l is sole remaining negated assumption at this level. Keep it.
+                    out_conflict.insert(~l);
+                    assert(isAssumedFalse(~l));
+                    assert(n_atLevel[level(y)] == 1);
+               }
+                --n_atLevel[level(y)];
+                --n_toR;
+            }
+            if(seen[y] == 2)
+                --n_atLevel[level(y)];
+            seen[y] = 0;
+        }
+    }
+    for(int i=0; i < out_conflict.size(); i++)
+        seen[var(out_conflict[i])] = 0;
+}
+
+/*_________________________________________________________________________________________________
+  |
+  |  analyzeFinal2 : (confl : CRef)  ->  [void]
+  |________________________________________________________________________________________________*/
+
+void Solver::analyzeFinal2(CRef confl, LSet& out_conflict)
+{
+    out_conflict.clear();
+    if (decisionLevel() == 0)
+        return;
+    assert(decisionLevel() >= 1);
+    int n_toR {0}; //keep track of number of ltierals still to resolve.
+    vec<int> n_atLevel (decisionLevel() + 1, 0); //n of lit in conflict at decision level.
+
+    //Start my marking conflict clause among the seen markers.
+    af2_mark_conflict(confl, true, n_toR, n_atLevel, out_conflict);
+
+    //no climb up trail doing resolutions
+    for (int i = trail.size()-1;  n_toR > 0 && i >= trail_lim[0]; i--) {
+        Lit l = trail[i]; Var y = var(l);
+        if (seen[y]) {
+            if(seen[y] == 1) {
+                if(!isAssumedTrue(l) || n_atLevel[level(y)] > 1) {
+                    //~l is not a negated assumption, or we have more than one at this level.
+                    //so we must resolve it away.
+                    af2_mark_conflict(reason(y), false, n_toR, n_atLevel, out_conflict);
+                }
+                else { //~l is sole remaining negated assumption at this level. Keep it.
+                    out_conflict.insert(~l);
+                    assert(isAssumedFalse(~l));
+                    assert(n_atLevel[level(y)] == 1);
+                }
+                --n_atLevel[level(y)];
+                --n_toR;
+            }
+            if(seen[y] == 2)
+                --n_atLevel[level(y)];
+            seen[y] = 0;
+        }
+    }
+    for(int i=0; i < out_conflict.size(); i++)
+        seen[var(out_conflict[i])] = 0;
+}
 
 void Solver::uncheckedEnqueue(Lit p, CRef from)
 {
     assert(value(p) == l_Undef);
     assigns[var(p)] = lbool(!sign(p));
-    vardata[var(p)] = mkVarData(from, decisionLevel(), vardata[var(p)].isAssumed);
+    vardata[var(p)].reason = from;
+    vardata[var(p)].level = decisionLevel(); //vardata[var(p)].isAssumed is not changed
     trail.push_(p);
 }
 
 
 /*_________________________________________________________________________________________________
-|
-|  propagate : [void]  ->  [Clause*]
-|
-|  Description:
-|    Propagates all enqueued facts. If a conflict arises, the conflicting clause is returned,
-|    otherwise CRef_Undef.
-|
-|    Post-conditions:
-|      * the propagation queue is empty, even if there was a conflict.
-|________________________________________________________________________________________________@*/
+  |
+  |  propagate : [void]  ->  [Clause*]
+  |
+  |  Description:
+  |    Propagates all enqueued facts. If a conflict arises, the conflicting clause is returned,
+  |    otherwise CRef_Undef.
+  |
+  |    Post-conditions:
+  |      * the propagation queue is empty, even if there was a conflict.
+  |________________________________________________________________________________________________@*/
+[[gnu::hot]]
 CRef Solver::propagate()
 {
     CRef    confl     = CRef_Undef;
@@ -584,19 +749,7 @@ CRef Solver::propagate()
 
             // Did not find watch -- clause is unit under assignment:
             *j++ = w;
-            if (value(first) == l_False || (decisionLevel() != 0 && isAssumedFalse(first))){
-                if(value(first) != l_False) {
-                    uncheckedEnqueue(first, cr);
-                    /*//DEBUG
-                    //printf("propagate() falsified assumption!\n");
-                    bool found = false;
-                    for(int k=0; k< assumptions.size(); k++)
-                        if(assumptions[k] == ~first)
-                            found = true;
-                    if(!found)
-                        printf("ERROR: propagate() not in assumptions\n");
-                    //DEBUG*/
-                }
+            if (value(first) == l_False){
                 confl = cr;
                 qhead = trail.size();
                 // Copy the remaining watches:
@@ -617,13 +770,13 @@ CRef Solver::propagate()
 
 
 /*_________________________________________________________________________________________________
-|
-|  reduceDB : ()  ->  [void]
-|
-|  Description:
-|    Remove half of the learnt clauses, minus the clauses locked by the current assignment. Locked
-|    clauses are clauses that are reason to some assignment. Binary clauses are never removed.
-|________________________________________________________________________________________________@*/
+  |
+  |  reduceDB : ()  ->  [void]
+  |
+  |  Description:
+  |    Remove half of the learnt clauses, minus the clauses locked by the current assignment. Locked
+  |    clauses are clauses that are reason to some assignment. Binary clauses are never removed.
+  |________________________________________________________________________________________________@*/
 struct reduceDB_lt {
     ClauseAllocator& ca;
     reduceDB_lt(ClauseAllocator& ca_) : ca(ca_) {}
@@ -683,13 +836,13 @@ void Solver::rebuildOrderHeap()
 
 
 /*_________________________________________________________________________________________________
-|
-|  simplify : [void]  ->  [bool]
-|
-|  Description:
-|    Simplify the clause database according to the current top-level assigment. Currently, the only
-|    thing done here is the removal of satisfied clauses, but more things can be put here.
-|________________________________________________________________________________________________@*/
+  |
+  |  simplify : [void]  ->  [bool]
+  |
+  |  Description:
+  |    Simplify the clause database according to the current top-level assigment. Currently, the only
+  |    thing done here is the removal of satisfied clauses, but more things can be put here.
+  |________________________________________________________________________________________________@*/
 bool Solver::simplify()
 {
     assert(decisionLevel() == 0);
@@ -739,18 +892,18 @@ bool Solver::simplify()
 
 
 /*_________________________________________________________________________________________________
-|
-|  search : (nof_conflicts : int) (params : const SearchParams&)  ->  [lbool]
-|
-|  Description:
-|    Search for a model the specified number of conflicts.
-|    NOTE! Use negative value for 'nof_conflicts' indicate infinity.
-|
-|  Output:
-|    'l_True' if a partial assigment that is consistent with respect to the clauseset is found. If
-|    all variables are decision variables, this means that the clause set is satisfiable. 'l_False'
-|    if the clause set is unsatisfiable. 'l_Undef' if the bound on number of conflicts is reached.
-|________________________________________________________________________________________________@*/
+  |
+  |  search : (nof_conflicts : int) (params : const SearchParams&)  ->  [lbool]
+  |
+  |  Description:
+  |    Search for a model the specified number of conflicts.
+  |    NOTE! Use negative value for 'nof_conflicts' indicate infinity.
+  |
+  |  Output:
+  |    'l_True' if a partial assigment that is consistent with respect to the clauseset is found. If
+  |    all variables are decision variables, this means that the clause set is satisfiable. 'l_False'
+  |    if the clause set is unsatisfiable. 'l_Undef' if the bound on number of conflicts is reached.
+  |________________________________________________________________________________________________@*/
 lbool Solver::search(int nof_conflicts)
 {
     assert(ok);
@@ -758,26 +911,85 @@ lbool Solver::search(int nof_conflicts)
     int         conflictC = 0;
     vec<Lit>    learnt_clause;
     starts++;
+
     for (;;){
         CRef confl = propagate();
         if (confl != CRef_Undef){
-
-	  if(value(ca[confl][0]) == l_True) {
-	    //DEBUG
-	    //printf("search() Early falsified assumption\n");
-	    if(!isAssumedFalse(ca[confl][0]))
-	      printf("ERROR search() in detecting early false assumption\n");
-	    analyzeFinal(ca[confl][0], conflict);
-	    return l_False;
-	  }
-
             // CONFLICT
             conflicts++; conflictC++;
-            if (decisionLevel() == 0) return l_False;
+            if (decisionLevel() == 0) return l_False; //Conflict at level 0
+            if (decisionLevel() == 1 && assumptions.size() > 0) {               //Conflict among assumptions
+                analyzeFinal1(confl, conflict);
+                int orig_size = conflict.size(); ++n_assump_conflicts;
+                cancelUntil(0);
+                if (conflict.size() == 1) {
+                    //slight extra. Normally units could escape since they are computed by analyzeFinal (not analyze)
+                    uncheckedEnqueue(conflict[0]);
+                    if(propagate() != CRef_Undef) //could have an even stronger (empty conflict) after prop.
+                        conflict.clear();
+                    return l_False;
+                }
 
+                if(!assump_2nd_process)
+                    return l_False;
+                //with 2nd process we try to get a shorter conflict
+                //by setting the assumption literals in conflict to true one per
+                //decision level until one is set to false. Note conflict has negated
+                //assumptions. First prepare level 0.
+                if(propagate() != CRef_Undef) {
+                    conflict.clear();
+                    return l_False;
+                }
+                bool did_not_reprocess {true};
+                for(int i = 0; i < conflict.size(); i++) { //
+                    Lit a = conflict[i];    //a is a negative assumption literal
+                    if(value(a) == l_False) //assumption is true
+                        continue;
+                    if(value(a) == l_True) { //assumption is false
+                        analyzeFinal2(a, conflict); //note overwrites conflict, so for loop must be terminated after.
+                        did_not_reprocess = false;
+                        break;
+                    }
+                    //else make ~a a new decision and then propagate.
+                    newDecisionLevel();
+                    uncheckedEnqueue(~a);
+                    CRef con = propagate();
+                    //It is possible that a subet of the assumptions causes a conflict...
+                    //instead of forcing an assumption to be falsified.
+                    if(con != CRef_Undef) {
+                        analyzeFinal2(con, conflict);
+                        did_not_reprocess = false;
+                        break;
+                    }
+                }
+                cancelUntil(0);
+                if(averbosity > 0 && conflict.size() != orig_size) {
+                    cout << "c 2nd assumption processing changed size. Orig = "
+                         << orig_size << " new = " << conflict.size() << " gain "
+                         << orig_size - conflict.size() << "\n";
+                    bool ok = true;
+                    for(int i=0; i < conflict.size(); i++)
+                        if(!isAssumedFalse(conflict[i]))
+                            ok=false;
+                    if(!ok)
+                    cout << "conflict does not contain all negated assumptions\n";
+                }
+                assump_saved += orig_size - conflict.size();
+                if(did_not_reprocess)
+                    printf("C Warning 2nd attempt did not find second conflict!\n");
+
+                if (conflict.size() == 1) {
+                    //again might have learnt a new unit so add this to the solver and check if an even shorter conflict is possible
+                    uncheckedEnqueue(conflict[0]);
+                    if(propagate() != CRef_Undef) //could have an even stronger (empty conflict) after prop.
+                        conflict.clear();
+                }
+                return l_False;
+            }
+
+            //otherwise we got a conflict at a deeper level...do ordinary clause learning
             learnt_clause.clear();
             analyze(confl, learnt_clause, backtrack_level);
-
             cancelUntil(backtrack_level);
 
             if (learnt_clause.size() == 1){
@@ -821,39 +1033,31 @@ lbool Solver::search(int nof_conflicts)
                 // Reduce the set of learnt clauses:
                 reduceDB();
 
-            Lit next = lit_Undef;
-            while (decisionLevel() < assumptions.size()){
-                // Perform user provided assumption:
-                Lit p = assumptions[decisionLevel()];
-                if (value(p) == l_True){
-                    // Dummy decision level:
-                    newDecisionLevel();
-                }else if (value(p) == l_False){
-                    analyzeFinal(~p, conflict);
-                    return l_False;
-                }else{
-                    next = p;
-                    break;
+            if (decisionLevel() == 0 && assumptions.size() > 0) { //enqueue all assumptions if finished with dl 0
+                newDecisionLevel();
+                for (int i = 0; i < assumptions.size(); i++) {
+                    Lit p = assumptions[i];
+                    if(value(p) == l_False) {
+                        conflict.insert(~p);
+                        return l_False;
+                    }
+                    else if (value(p) == l_Undef)
+                        uncheckedEnqueue(p);
                 }
             }
-
-            if (next == lit_Undef){
-                // New variable decision:
+            else {
                 decisions++;
-                next = pickBranchLit();
-
-                if (next == lit_Undef)
-                    // Model found:
+                Lit next = pickBranchLit();
+                if(next == lit_Undef)
+                    //Model found
                     return l_True;
+                // Increase decision level and enqueue 'next'
+                newDecisionLevel();
+                uncheckedEnqueue(next);
             }
-
-            // Increase decision level and enqueue 'next'
-            newDecisionLevel();
-            uncheckedEnqueue(next);
         }
     }
 }
-
 
 double Solver::progressEstimate() const
 {
@@ -879,7 +1083,7 @@ double Solver::progressEstimate() const
   ...
 
 
- */
+*/
 
 static double luby(double y, int x){
 
@@ -921,39 +1125,21 @@ lbool Solver::solve_()
         printf("===============================================================================\n");
     }
 
-    // Search:
-#if 0
-    //DEBUG
-    for(Var v=0; v < nVars(); v++)
-      if(isAssumed(v) != l_Undef)
-	printf("ERROR: vardata isAssumed flags not cleared\n");
-    //DEBUG
-#endif
-
+    //Initialize Assumptions
     for(int i=0; i < assumptions.size(); i++) {
-      Lit p = assumptions[i];
-      if(isAssumedFalse(p)) {
-	conflict.clear(); conflict.insert(p); conflict.insert(~p);
-	status = l_False;
-	break;
-      }
-      setAssumption(p);
+        Lit p = assumptions[i];
+        if(isAssumedFalse(p)) {
+            conflict.clear(); conflict.insert(p); conflict.insert(~p);
+            status = l_False;
+            break;
+        }
+        setAssumption(p);
     }
 
-    if(conflict.size() > 0) {
-      printf("c WARNING: Found conflict in assumptions\n");
-#if 0
-    //DEBUG
-      printf("Conflict = [");
-      for(int i=0; i < conflict.size(); i++) {
-	Lit p = conflict[i];
-	printf("%s%d, ", sign(p) ? "-" : "", var(p));
-      }
-      printf("]\n");
-    //DEBUG
-#endif
-    }
+    if(conflict.size() > 0)
+        printf("c WARNING: Found conflict in assumptions\n");
 
+    // Search:
     int curr_restarts = 0;
     while (status == l_Undef){
         double rest_base = luby_restart ? luby(restart_inc, curr_restarts) : pow(restart_inc, curr_restarts);
@@ -965,7 +1151,6 @@ lbool Solver::solve_()
     if (verbosity >= 1)
         printf("===============================================================================\n");
 
-
     if (status == l_True){
         // Extend & copy model:
         model.growTo(nVars());
@@ -975,8 +1160,7 @@ lbool Solver::solve_()
 
     cancelUntil(0);
     for(int i=0; i< assumptions.size(); i++)
-      unsetAssumption(assumptions[i]);
-
+        unsetAssumption(assumptions[i]);
     return status;
 }
 

@@ -26,8 +26,15 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <signal.h>
 #include <iostream>
 
+#ifdef GLUCOSE
+#include "glucose/utils/System.h"
+#include "glucose/utils/Options.h"
+#else
 #include "minisat/utils/System.h"
 #include "minisat/utils/Options.h"
+#endif
+
+
 #include "maxhs/core/MaxSolver.h"
 #include "maxhs/core/Wcnf.h"
 #include "maxhs/utils/Params.h"
@@ -50,8 +57,8 @@ static void SIGINT_exit(int signum) {
 }
 
 const int majorVer {3};
-const int minorVer {0};
-const int update {0};
+const int minorVer {2};
+const int update {1};
 
 int main(int argc, char** argv) {
   try {
@@ -74,11 +81,13 @@ int main(int argc, char** argv) {
     }
     cout << "c MaxHS " << majorVer << "." << minorVer << "." << update << "\n";
     cout << "c Instance: " << argv[argc-1] << "\n";
-    cout << "c Parameter Settings\n";
-    cout << "c ============================================\n";
-    printOptionSettings("c ", cout);
-    cout << "c ============================================\n";
-    cout << "c\n";
+    if(params.printOptions) {
+      cout << "c Parameter Settings\n";
+      cout << "c ============================================\n";
+      printOptionSettings("c ", cout);
+      cout << "c ============================================\n";
+      cout << "c\n";
+    }
 
     signal(SIGINT, SIGINT_exit);
     signal(SIGXCPU, SIGINT_exit);

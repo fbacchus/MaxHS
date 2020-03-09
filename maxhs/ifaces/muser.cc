@@ -27,9 +27,19 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "maxhs/ifaces/muser.h"
 #include "maxhs/utils/io.h"
 #include "maxhs/utils/Params.h"
+
+#ifdef GLUCOSE
+#include "glucose/utils/Options.h"
+#else
 #include "minisat/utils/Options.h"
+#endif
 
 using namespace MaxHS_Iface;
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
+
 using namespace Minisat;
 
 Muser::Muser(const Wcnf* f, Bvars& b):

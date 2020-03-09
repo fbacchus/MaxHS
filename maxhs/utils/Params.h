@@ -34,7 +34,6 @@ public:
   Params();
   ~Params() {}
   void readOptions();
-  void printOptions();
   int verbosity;
   int mverbosity;
   const double noLimit;
@@ -48,6 +47,7 @@ public:
 
   bool fbeq;
   bool fb;
+  bool printOptions;
   bool printBstSoln;
   bool printSoln;
   double tolerance;
@@ -78,6 +78,7 @@ public:
   bool improve_model;
   bool find_forced;
 
+  double cplex_min_ticks;
   int cplex_threads;
   bool cplex_tune;
   bool cplex_data_chk;

@@ -26,8 +26,18 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <iostream>
 #include <utility>
 #include <unordered_map>
-#include "maxhs/utils/io.h"
+
+#ifdef GLUCOSE
+#include "glucose/core/SolverTypes.h"
+#else
 #include "minisat/core/SolverTypes.h"
+#endif
+
+#include "maxhs/utils/io.h"
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using Minisat::Lit;
 using Minisat::Var;

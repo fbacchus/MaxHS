@@ -35,10 +35,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "maxhs/utils/io.h"
 #include "maxhs/ifaces/miniSatSolver.h"
 #include "maxhs/ifaces/GreedySolver.h"
-//#include "maxhs/ifaces/greedySatSolver.h"
-#include "minisat/utils/System.h"
 
-//using namespace Minisat;
+#ifdef GLUCOSE
+#include "glucose/utils/System.h"
+#else
+#include "minisat/utils/System.h"
+#endif
+
 using namespace MaxHS;
 using namespace MaxHS_Iface;
 
@@ -95,7 +98,7 @@ MaxSolver::MaxSolver(Wcnf *f) : //many of are already default initialized...but 
   params.instance_file_name = theWcnf->fileName();
   if(theWcnf->integerWts())
     absGap = 0.75;
-  cplex  = new Cplex {bvars, UBmodelSofts, theWcnf->integerWts()};
+  cplex  = new Cplex {bvars, UBmodelSofts, UBmodel, theWcnf->integerWts()};
   if(!cplex->is_valid())
     cout << "c ERROR. Problem initializing CPLEX solver\n";
   /*if(theWcnf->getMxs().size() > 0)
@@ -270,7 +273,6 @@ void MaxSolver::solve() {
     optFound("c Solved by Disjoint phase.");
     return;
   }
-
   //4. mutexes processing.
   processMutexes();
 
@@ -355,8 +357,9 @@ void MaxSolver::seqOfSAT_maxsat() {
       cout << "c **********Iter: " << iteration++ << " Elapsed Time = "
            << cpuTime() - globalStartTime << "\n";
 
-    cplexAddNewForcedBvars();
-    cplexAddNewClauses();
+    int new_cplex_constraints {0};
+    new_cplex_constraints += cplexAddNewForcedBvars();
+    new_cplex_constraints += cplexAddNewClauses();
 
     //1.5
     if(!allClausesSeeded && params.lp_harden)
@@ -372,21 +375,36 @@ void MaxSolver::seqOfSAT_maxsat() {
         optFound("c solved by initial greedy solve");
         return;
       }
+      if(get_ub_conflicts()) {
+        optFound("c Solved by conflicts from UB model\n");
+        return;
+      }
       //don't want these clauses feed to cplex.
       //if cplex already has full model.
-      cplexClauses.clear();
+      //cplexClauses.clear();
     }
     first_time=false;
 
     //2. Solve CPLEX model and update Bounds
-    if(cplex_found_optimum || prev_cplex_solution_obj == 0)
+    if(allClausesSeeded)
+      //If CPLEX has full model, just let it run until it finds an optimal solution
+      cplex_UB = 0;
+    else if(cplex_found_optimum || prev_cplex_solution_obj == 0 || new_cplex_constraints)
+      //If the previous solve found an optimal solution (to its current model or
+      //there was no prior solve, or the cplex model has been improved (which must
+      //increase its cost) then stop cplex when it finds a better model
+      //than the current SAT UB model.
       cplex_UB = UB();
     else
+      //Since we are aborting on non-optimal solutions we could have a sequence
+      //of non-optimal CPLEX solutions that satisfy the SAT model.
+      //In this case we want to ensure that when CPLEX is called again it returns
+      //a better model than the last time...to prevent cycling.
       cplex_UB = fmin(prev_cplex_solution_obj, UB());
 
     Weight cplexLB = cplex->solve(cplexsoln, cplex_UB); //cplexLB is LB
     if (cplexLB < 0) {
-      printErrorAndExit("c ERROR: Cplex::solve() failed");
+      printErrorAndExit("c WARNING: Cplex::solve() failed");
     }
     auto cplexSolnWt = getWtOfBvars(cplexsoln); //solution cost is UB
     reportCplex(cplexLB, cplexSolnWt);
@@ -1100,7 +1118,7 @@ bool MaxSolver::cplexAddCls(vector<Lit>&& cls) {
 
 //TODO Better abstraction to facilitate sharing of unit or other clauses between solvers.
 //
-void MaxSolver::cplexAddNewForcedBvars() {
+int MaxSolver::cplexAddNewForcedBvars() {
   cplexNU.update(satsolver);
   vector<Lit>& forced = cplexNU.forced;
   int nf {0};
@@ -1111,6 +1129,7 @@ void MaxSolver::cplexAddNewForcedBvars() {
     }
   if (params.verbosity > 0 && nf > 0)
       cout << "c Add to CPLEX " << nf << " Forced bvars.\n";
+  return nf;
 }
 
 void MaxSolver::greedyAddNewForcedBvars() {
@@ -1210,7 +1229,8 @@ void MaxSolver::satSolverAddBvarsFromSofts() {
     cout << "c Add to satsolver " << nf << " forced negated bvars.\n";
 }
 
-void MaxSolver::cplexAddNewClauses() {
+int MaxSolver::cplexAddNewClauses() {
+  auto n_new_constraints {cplexClauses.size()};
   if (params.verbosity > 0) {
     double totalLits = cplexClauses.total_size();
     cout << "c CPLEX: += " << cplexClauses.size() << " Clauses. Average size ="
@@ -1219,6 +1239,7 @@ void MaxSolver::cplexAddNewClauses() {
   for(size_t i = 0; i < cplexClauses.size(); i++)
     cplexAddCls(cplexClauses.getVec(i));
   cplexClauses.clear();
+  return n_new_constraints;
 }
 
 void MaxSolver::greedyAddNewClauses() {
@@ -1252,7 +1273,7 @@ void MaxSolver::processMutexes() {
   for(auto cls : cplexClauses) //not yet feed into cplex
     for(auto l : cls) 
       in_cplex[var(l)] = 1;
-    for(size_t i=0; i < in_cplex.size(); i++) //already in cplex
+  for(size_t i=0; i < in_cplex.size(); i++) //already in cplex
     if(cplex->var_in_cplex(i))
       in_cplex[i] = 1;
 
@@ -1437,14 +1458,21 @@ void MaxSolver::printStatsAndExit(int signum, int exitType) {
         cout << "o " << std::fixed << std::setprecision(0) << solCost << "\n";
       cout.precision(p);
       cout.unsetf(std::ios::fixed);
-
+      cout << "s UNKNOWN\n";
       if(params.printBstSoln) {
         cout << "c Best Model Found:\n";
         if(haveUBModel) {
-          cout << "c ";
-          for (int i = 0; i < theWcnf->nVars(); i++)
-            cout << (UBmodel[i] == l_True ? "" : "-")  << i+1 << " ";
+          theWcnf->rewriteModelToInput(UBmodel);
+          for(size_t i=0; i < UBmodel.size(); i++)
+            if(UBmodel[i] == l_Undef)
+              UBmodel[i] = l_True; //set unset vars to arbitary value (true)
+          printSolution(UBmodel);
           cout << "\n";
+          int nfalseSofts;
+          if(theWcnf->checkModelFinal(UBmodel, nfalseSofts) != UB() + theWcnf->baseCost()) //we cannot use wcnf after this!
+            cout << "c ERROR incorrect model reported" << endl;
+          else
+            cout << "c Solved: Number of falsified softs = " << nfalseSofts << "\n";
         }
         else
           cout << "c No Model of hard clauses found\n";
@@ -1740,7 +1768,6 @@ void MaxSolver::optFound(std::string reason) {
       UBmodel[i] = l_True; //set unset vars to arbitary value (true)
 
   printSolution(UBmodel);
-  fflush(stdout);
   int nfalseSofts;
   if(theWcnf->checkModelFinal(UBmodel, nfalseSofts) != UB() + theWcnf->baseCost()) //we cannot use wcnf after this!
     cout << "c ERROR incorrect model reported" << endl;

@@ -29,13 +29,27 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <algorithm>
 #include <ostream>
 
-#include "maxhs/ifaces/GreedySolver.h"
-#include "maxhs/utils/io.h"
+#ifdef GLUCOSE
+#include "glucose/core/SolverTypes.h"
+#include "glucose/utils/System.h"
+#include "glucose/mtl/Heap.h"
+#else
 #include "minisat/core/SolverTypes.h"
 #include "minisat/utils/System.h"
 #include "minisat/mtl/Heap.h"
+#endif
+
+
+#include "maxhs/ifaces/GreedySolver.h"
+#include "maxhs/utils/io.h"
+
 
 using namespace MaxHS_Iface;
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
+
 using namespace Minisat;
 
 GreedySolver::GreedySolver(Bvars& b) :

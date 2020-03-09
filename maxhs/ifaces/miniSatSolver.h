@@ -36,9 +36,19 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef MINISATSOLVER_H
 #define MINISATSOLVER_H
 
+#ifdef GLUCOSE
+#include "glucose/simp/SimpSolver.h"
+#include "glucose/core/SolverTypes.h"
+#else
 #include "minisat/simp/SimpSolver.h"
-#include "maxhs/ifaces/SatSolver.h"
 #include "minisat/core/SolverTypes.h"
+#endif
+
+#include "maxhs/ifaces/SatSolver.h"
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using Minisat::vec;
 using Minisat::var_Undef;
@@ -75,13 +85,12 @@ public:
   int nAssigns() const { return Minisat::SimpSolver::nAssigns(); }
   int nClauses() const { return Minisat::SimpSolver::nClauses(); }
   int nInVars() const    { return Minisat::SimpSolver::nVars(); }
-  
   size_t nVars() const { return ex2in_map.size(); }  //not all these externals exist
+  bool inSolver(Var v) const { return ex2in(v) != var_Undef; }
   bool activeVar(Var v) const {
-    return ex2in(v) != var_Undef && !isEliminated(ex2in(v)) && curVal(v) == l_Undef; }
-  
-  //get clauses currently in solver (e.g., after preprocessing)
+    return inSolver(v) && !isEliminated(ex2in(v)) && curVal(v) == l_Undef; }
 
+  //get clauses currently in solver (e.g., after preprocessing)
   //_size counts clauses possibly deleted or already satisfied
   int get_clauses_size() const { return clauses.size(); }
   int get_learnts_size() const { return learnts.size(); }
@@ -108,6 +117,7 @@ public:
   uint64_t getConfs() const { return conflicts; }
 
   //preprocessing
+  void freezeVar(Lit l) { freezeVar(var(l)); }
   void freezeVar(Var v);
   bool eliminate(bool turn_off_elim);
   bool simplify();

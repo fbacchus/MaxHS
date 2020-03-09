@@ -23,15 +23,24 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ***********/
 
 /* greedysat interface
-*/
+ */
 
 #ifndef GREEDYSATSOLVER_H
 #define GREEDYSATSOLVER_H
 
+#ifdef GLUCOSE
+#include "glucose/core/SolverTypes.h"
+#else
+#include "minisat/core/SolverTypes.h"
+#endif
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
+
 #include "maxhs/core/MaxSolverTypes.h"
 #include "maxhs/core/Bvars.h"
 #include "maxhs/ifaces/miniSatSolver.h"
-#include "minisat/core/SolverTypes.h"
 
 namespace MaxHS_Iface {
   class GreedySatSolver : public miniSolver {
@@ -76,24 +85,24 @@ namespace MaxHS_Iface {
       //x < y if satcount(x)/wt(x) > satcount(x)/wt(y). Note lits have
       //been converted to indicies before putting into the heap.
       bool operator() (Lit x, Lit y) const {
-	//cout << "ClsOrderLt(" << x << "," << y << ") sc(" << sc[toInt(x)] << "," << sc[toInt(y)] << ") "
-	//   << " wt(" << wts[toInt(x)] << "," << wts[toInt(y)] << ")\n";
+        //cout << "ClsOrderLt(" << x << "," << y << ") sc(" << sc[toInt(x)] << "," << sc[toInt(y)] << ") "
+        //   << " wt(" << wts[toInt(x)] << "," << wts[toInt(y)] << ")\n";
 
-	if(sc[toInt(x)] == sc[toInt(y)] && wts[toInt(x)] == wts[toInt(y)])
-	  return x < y;
-	return better(sc[toInt(x)], wts[toInt(x)], sc[toInt(y)], wts[toInt(y)]);
+        if(sc[toInt(x)] == sc[toInt(y)] && wts[toInt(x)] == wts[toInt(y)])
+          return x < y;
+        return better(sc[toInt(x)], wts[toInt(x)], sc[toInt(y)], wts[toInt(y)]);
       }
       bool better(int sc1, Weight wt1, int sc2, Weight wt2) const {
-	//return true if the metric (sc1, w1) (satcount, litwt)
-	//represents a better choice than (sc2, w2).
-	if(wt1 == 0 && wt2 == 0)
-	  return sc1 > sc2;
-	else if(wt1 == 0 && wt2 > 0)
-	  return (sc1 > 0 || sc2 == 0);
-	else if(wt1 > 0 && wt2 == 0)
-	  return (sc1 > 0 && sc2 == 0);
-	else //(wt1 > 0 && wt2 > 0)
-	  return sc1/wt1 > sc2/wt2;
+        //return true if the metric (sc1, w1) (satcount, litwt)
+        //represents a better choice than (sc2, w2).
+        if(wt1 == 0 && wt2 == 0)
+          return sc1 > sc2;
+        else if(wt1 == 0 && wt2 > 0)
+          return (sc1 > 0 || sc2 == 0);
+        else if(wt1 > 0 && wt2 == 0)
+          return (sc1 > 0 && sc2 == 0);
+        else //(wt1 > 0 && wt2 > 0)
+          return sc1/wt1 > sc2/wt2;
       }
       vector<Weight>& wts;
       vector<int>& sc;
@@ -103,7 +112,7 @@ namespace MaxHS_Iface {
     Heap<Lit,ClsOrderLt,Minisat::MkIndexLit> sftcls_heap;
 
     lbool solve_(const vector<Lit>& assumps, vector<Lit>& conflict,
-		 int64_t confBudget, int64_t propBudget);
+                 int64_t confBudget, int64_t propBudget);
   };
   
 } //end namespace

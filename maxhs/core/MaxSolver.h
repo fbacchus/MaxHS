@@ -30,10 +30,14 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 using std::vector;
 
+#ifdef GLUCOSE
+#include "glucose/core/SolverTypes.h"
+#else
 #include "minisat/core/SolverTypes.h"
+#endif
+
 #include "maxhs/core/MaxSolverTypes.h"
 #include "maxhs/ifaces/SatSolver.h"
-//#include "maxhs/ifaces/greedySatSolver.h"
 #include "maxhs/ifaces/GreedySolver.h"
 #include "maxhs/ifaces/muser.h"
 #include "maxhs/ifaces/Cplex.h"
@@ -44,6 +48,11 @@ using std::vector;
 #include "maxhs/ds/Packed.h"
 
 using namespace MaxHS_Iface;
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
+
 using namespace Minisat;
 
 namespace MaxHS { 
@@ -144,14 +153,14 @@ protected:
   Packed_vecs<Lit> greedyClauses;
   Packed_vecs<int> sftSatisfied; //map from ordinary var --> satisfied sft clauses
 
-  void cplexAddNewClauses();
+  int cplexAddNewClauses();
   void greedyAddNewClauses();
   bool cplexAddCls(vector<Lit>&& cls); //moves it argument in. Can only input temporaries.
   void store_cplex_greedy_cls(const vector<Lit>& cls);
 
   //Transfer units between sub-solvers.
   void greedyAddNewForcedBvars();
-  void cplexAddNewForcedBvars();
+  int cplexAddNewForcedBvars();
   void satSolverAddNewForcedVars();
   void muserAddNewForcedVars();
   struct GetNewUnits {

@@ -20,7 +20,7 @@
  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  
- ***********/
+***********/
 
 /* Generic interface for maxhs to use a satsolver.
    Access to a particular sat solver is implemented by defining a
@@ -35,17 +35,30 @@
    This also means however, that not all external variables will be given a value
    by a found sat model.
  
- */
+*/
 
 #ifndef IFACESAT_H
 #define IFACESAT_H
 
 #include <vector>
 #include <iostream> 
+#include <memory>
+
+#ifdef GLUCOSE
+#include "glucose/core/SolverTypes.h"
+#include "glucose/core/Solver.h"
+#include "glucose/utils/System.h"
+#else
 #include "minisat/core/SolverTypes.h"
 #include "minisat/core/Solver.h"
 #include "minisat/utils/System.h"
+#endif
+
 #include "maxhs/utils/io.h"
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using Minisat::Lit;
 using Minisat::lbool;
@@ -63,65 +76,31 @@ namespace MaxHS {
 }
 
 namespace MaxHS_Iface {
+  class SatSolver;
+  typedef std::unique_ptr<SatSolver> SatSolver_uniqp;
+
   class SatSolver {
   public:
     SatSolver(): timer {0}, totalTime {0}, prevTotalTime {0}, stime{-1}, solves {0}, prevSolves{0} {}
     virtual ~SatSolver() {}
-    
+
     virtual bool status() const = 0;
     //Return false if unsat already detected (solver is in inconsistent state)
-    
+
     lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
-                      int64_t confBudget, int64_t propBudget) {
-    /*******************************************************************
-     Solve with assumptions. Track statistics.
-     can set conflict and propagation budgets (-1 = no budget)
-     Return l_true/l_false/l_Undef formula is sat/unsat/budget-exceeded
-     
-     If unsat put conflict clause into conflict (mapped to external numbering)
-     if sat, the "modelValue" function allow access to satisfying assignment
-     *******************************************************************/
-      stime = cpuTime();
-      prevTotalTime = totalTime;
-      lbool val = solve_(assumps, conflict, confBudget, propBudget);
-      totalTime += cpuTime() - stime;
-      stime = -1;
-      solves++;
-      return val; 
-    }
-    
-    lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict, double timeLimit)  {
+                      int64_t confBudget, int64_t propBudget);
+    // Solve with assumptions. Track statistics.
+    // can set conflict and propagation budgets (-1 = no budget)
+    //   Return l_true/l_false/l_Undef formula is sat/unsat/budget-exceeded
+
+    //   If unsat put conflict clause into conflict (mapped to external numbering)
+    //   if sat, the "modelValue" function allow access to satisfying assignment
+
+    lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict, double timeLimit);
       //minisat's runtime is not very predictable. So if no complex solves have been done before
       //odds are the time taken will far from the timeLimit. 
       //The accuracy of the timeLimit gets better as more solves are executed.
-      int64_t propBudget, props;
-      props = getProps(); //returns total number of props done by solver
-      bool didTrial {false};
 
-      if(solves > 0 && props > 0) {
-        propBudget = props/totalTime * timeLimit;
-      }
-      else {
-        propBudget = 1024*1024*10;
-	didTrial = true;
-      }
-      stime = cpuTime();
-      prevTotalTime = totalTime; 
-      lbool val = solve_(assumps, conflict, -1, propBudget);
-      solves++;
-      double solvetime1 = cpuTime() - stime;
-      if(didTrial && val == l_Undef && solvetime1 < timeLimit*.60) {
-	auto moreProps = int64_t((getProps()-props)/solvetime1 * timeLimit - propBudget);
-	if (moreProps > propBudget*0.5) {
-	  val =  solve_(assumps, conflict, -1, moreProps);
-	}
-        solves++;
-      }
-      totalTime += cpuTime() - stime;
-      stime = -1;
-      return val; 
-    }
-    
     lbool solve(const vector<Lit>& assumps, vector<Lit>& conflict)
       { return  solveBudget(assumps, conflict, -1, -1); }
     
@@ -140,28 +119,11 @@ namespace MaxHS_Iface {
     lbool solve(Lit l) 
       { vector<Lit> tc; return solve(vector<Lit> {l}, tc); }
 
-    lbool relaxSolve(const vector<Lit>& assumps, const vector<Lit>& branchLits, double timeLimit) {
-      int64_t propBudget, props;
-      if(timeLimit <= 0)
-	propBudget = -1;
-      else {
-	props = getProps(); //returns total number of props done by solver
-	if(solves > 0 && props > 0) 
-	  propBudget = props/totalTime * timeLimit;
-	else 
-	  propBudget = 1024*1024*10;
-      }
-      stime = cpuTime();
-      prevTotalTime = totalTime; 
-      auto val = relaxSolve_(assumps, branchLits, propBudget);
-      solves++;
-      totalTime += cpuTime() - stime;
-      stime = -1;
-      return val;
-    }
+    lbool relaxSolve(const vector<Lit>& assumps, const vector<Lit>& branchLits, double timeLimit);
+      //Do relaxed solve (where sat solver must initially branch on branchLits
 
     virtual lbool relaxSolve_(const vector<Lit>& assumps, const vector<Lit>& branchLits,
-		      int64_t propBudget) = 0;
+                              int64_t propBudget) = 0;
 
 
     //preprocessing
@@ -183,6 +145,8 @@ namespace MaxHS_Iface {
     virtual vector<Lit> getForced(int index) = 0; 
 
     //data from the solver
+    virtual bool inSolver(Lit lt) const { return inSolver(var(lt)); } //the solver knows about these variables
+    virtual bool inSolver(Var v) const = 0;
     virtual int nAssigns() const = 0; //# assigned variables
     virtual int nClauses() const = 0; //# original clauses
     virtual int nInVars() const = 0;    //# internal variables
@@ -212,7 +176,8 @@ namespace MaxHS_Iface {
     
     //add clause to theory, return theory status
     virtual bool addClause(const vector<Lit>& lts) = 0;
-    bool addClause(Lit p) { vector<Lit> tmp; tmp.push_back(p); return(addClause(tmp)); }
+    bool addClause(Lit p) { vector<Lit> tmp {p}; return(addClause(tmp)); }
+    bool addClause(Lit p, Lit q) { vector<Lit> tmp {p,q}; return(addClause(tmp)); }
 
     //set polarity of variable (lbool b = l_True if we give it a sign---set to false)
     virtual void setPolarity(Var v, lbool b) = 0;
@@ -258,8 +223,8 @@ namespace MaxHS_Iface {
     double solveTime() { return totalTime-prevTotalTime; }
     double total_time() {
       if (stime >=0) {
-	totalTime += cpuTime() - stime;
-	stime = -1;
+        totalTime += cpuTime() - stime;
+        stime = -1;
       }
       return totalTime;
     }
@@ -272,14 +237,16 @@ namespace MaxHS_Iface {
   protected:
     //interface to solver
     virtual lbool solve_(const vector<Lit>& assumps, vector<Lit>& conflict,
-			 int64_t confBudget, int64_t propBudget) = 0;
+                         int64_t confBudget, int64_t propBudget) = 0;
     
     //stats
     double timer, totalTime, prevTotalTime, stime;
     int solves;
     int prevSolves;
+
   }; //Class SatSolver
-  
+
+
 } //namespace
 
 #endif

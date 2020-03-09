@@ -33,6 +33,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "maxhs/utils/io.h"
 
 using namespace MaxHS_Iface;
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
+
 using namespace Minisat;
 
 miniSolver::miniSolver() :
@@ -358,7 +363,7 @@ bool miniSolver::addClause(const vector<Lit>& lts)
   //cout << "mini addCls: ext=" << lts << " int=" << ps << "\n";
 
   if(ps.size()>0)
-    return Minisat::SimpSolver::addClause_(ps); 
+    return Minisat::SimpSolver::addClause_(ps);
   else
     return true;
 }

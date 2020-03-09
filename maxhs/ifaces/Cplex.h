@@ -28,11 +28,22 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <ilcplex/cplexx.h> 
 #include <map>
 #include <vector>
+
+#ifdef GLUCOSE
+#include "glucose/core/SolverTypes.h"
+#include "glucose/utils/System.h"
+#else
+#include "minisat/core/SolverTypes.h"
+#include "minisat/utils/System.h"
+#endif
+
 #include "maxhs/core/MaxSolverTypes.h"
 #include "maxhs/core/Bvars.h"
 #include "maxhs/core/Wcnf.h"
-#include "minisat/core/SolverTypes.h"
-#include "minisat/utils/System.h"
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using namespace Minisat;
 using std::vector;
@@ -40,7 +51,8 @@ using std::vector;
 namespace MaxHS_Iface {
   class Cplex {
   public:
-    Cplex(Bvars& b, vector<lbool>& ubModelSofts, bool integerWts);
+    Cplex(Bvars& b, vector<lbool>& ubModelSofts,
+          vector<lbool>& ubModel, bool integerWts);
     ~Cplex();
 
     Weight solveBudget(vector<Lit>& solution, double UB, double timeLimit) {
@@ -113,6 +125,7 @@ namespace MaxHS_Iface {
   protected:
     Bvars& bvars;
     vector<lbool>& ubModelSofts;
+    vector<lbool>& ubModel;
     CPXENVptr env;
     CPXLPptr mip;
     CPXLPptr trial_mip; //use this mip to do lp-relaxation and trial hardening

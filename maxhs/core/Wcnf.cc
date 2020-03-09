@@ -27,15 +27,26 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <algorithm>
 #include <set>
 #include <iomanip>
-#include "maxhs/core/Wcnf.h"
+
+#ifdef GLUCOSE
+#include "glucose/utils/System.h"
+#include "glucose/core/SolverTypes.h"
+#else
 #include "minisat/utils/System.h"
+#include "minisat/core/SolverTypes.h"
+#endif
+
+#include "maxhs/core/Wcnf.h"
 #include "maxhs/utils/io.h"
 #include "maxhs/core/Dimacs.h"
-#include "minisat/core/SolverTypes.h"
 #include "maxhs/ifaces/miniSatSolver.h"
 #include "maxhs/utils/hash.h"
 #include "maxhs/utils/Params.h"
 #include "maxhs/core/Bvars.h"
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using Minisat::sign;
 using Minisat::lbool;
@@ -43,7 +54,7 @@ using Minisat::mkLit;
 using Minisat::toInt;
 using Minisat::toLit;
 using Minisat::var_Undef;
-using MaxHS_Iface::miniSolver;
+using MaxHS_Iface::SatSolver_uniqp;
 
 Wcnf::Wcnf() :
   maxorigvar{0},
@@ -242,14 +253,14 @@ bool Wcnf::subEqs() {
 
   //1. Find current units in the hard clauses and then find/binaries
   //among the hard clauses reduced by those units.
-  miniSolver sat_solver;
-  sat_solver.eliminate(true); //no preprocessing
+  SatSolver_uniqp sat_solver {new miniSolver};
+  sat_solver->eliminate(true); //no preprocessing
   for(size_t i = 0; i < nHards(); i++) 
-    if(!sat_solver.addClause(getHard(i))) {
+    if(!sat_solver->addClause(getHard(i))) {
       unsat = true;
       return false;
     }
-  vector<Lit> hard_units = sat_solver.getForced(0);
+  vector<Lit> hard_units = sat_solver->getForced(0);
   vector<Lit> binaries = get_binaries(sat_solver);
   
   //2. Build adjacency map to represent the binaries
@@ -315,22 +326,22 @@ bool Wcnf::subEqs() {
 vector<Lit> Wcnf::get_units() {
   //feed hard clauses of wcnf into a sat solver, do unit prop, and then 
   //return the found units 
-  miniSolver sat_solver;
-  sat_solver.eliminate(true); //no preprocessing
+  SatSolver_uniqp sat_solver {new miniSolver};
+  sat_solver->eliminate(true); //no preprocessing
   for(size_t i = 0; i < nHards(); i++) 
-    if(!sat_solver.addClause(getHard(i))) {
+    if(!sat_solver->addClause(getHard(i))) {
       unsat = true;
       return {};
     }
-  return sat_solver.getForced(0);
+  return sat_solver->getForced(0);
 }
 
-vector<Lit> Wcnf::get_binaries(miniSolver& sat_solver) {
+vector<Lit> Wcnf::get_binaries(SatSolver_uniqp& sat_solver) {
   vector<Lit> binaries {};
   for(auto& clause : hard_cls) {
     int nlits = 0;
     for(auto l : clause) {
-      auto truth_value = sat_solver.curVal(l);
+      auto truth_value = sat_solver->curVal(l);
       if(truth_value == l_Undef)
         nlits++;
 
@@ -345,14 +356,14 @@ vector<Lit> Wcnf::get_binaries(miniSolver& sat_solver) {
     if(nlits == 2) {
       int sz {};
       for(auto l : clause)
-        if(sat_solver.curVal(l) == l_Undef) {
+        if(sat_solver->curVal(l) == l_Undef) {
           binaries.push_back(l);
           sz++;
         }
       if(sz != 2) {
         cout << "c ERROR in WCNF get_binaries...binary of size " << sz << "\n [";
         for(auto l : clause) {
-          sat_solver.printLit(l);
+          sat_solver->printLit(l);
           cout << ", ";
         }
         cout << "]\n";
@@ -528,11 +539,11 @@ vector<vector<Lit>> Wcnf::binary_scc(vector<vector<Lit>>& edges) {
   
 void Wcnf::rmUnits() {
   if(unsat) return;
-  miniSolver sat_solver;
-  sat_solver.eliminate(true); //no preprocessing
+  SatSolver_uniqp sat_solver {new miniSolver};
+  sat_solver->eliminate(true); //no preprocessing
 
   for(size_t i = 0; i < nHards(); i++) 
-    if(!sat_solver.addClause(getHard(i))) {
+    if(!sat_solver->addClause(getHard(i))) {
       unsat = true;
       return;
     }
@@ -542,7 +553,7 @@ void Wcnf::rmUnits() {
   auto ps = soft_cls.size();
   auto ps_lits = soft_cls.total_size();
   
-  auto hard_units_found  = sat_solver.getForced(0);
+  auto hard_units_found  = sat_solver->getForced(0);
 
   if(hard_units_found.size() > 0) {
     hard_cls = reduce_by_units(hard_cls, sat_solver, false);
@@ -566,7 +577,7 @@ void Wcnf::rmUnits() {
          << ps_lits - soft_cls.total_size() << " lits\n";
 }
       
-Packed_vecs<Lit> Wcnf::reduce_by_units(Packed_vecs<Lit>& cls, miniSolver& sat_solver, bool softs) {
+Packed_vecs<Lit> Wcnf::reduce_by_units(Packed_vecs<Lit>& cls, SatSolver_uniqp& sat_solver, bool softs) {
   //auxilary function for rmUnits
   Packed_vecs<Lit> tmp;
   if(unsat) return tmp;
@@ -577,9 +588,9 @@ Packed_vecs<Lit> Wcnf::reduce_by_units(Packed_vecs<Lit>& cls, miniSolver& sat_so
     c.clear();
     bool isSat {false};
     for(auto l : cls[i]) 
-      if(sat_solver.curVal(l) == l_Undef)
+      if(sat_solver->curVal(l) == l_Undef)
         c.push_back(l);
-      else if(sat_solver.curVal(l) == l_True) {
+      else if(sat_solver->curVal(l) == l_True) {
         isSat = true;
         break;
       }
@@ -791,11 +802,11 @@ void Wcnf::simpleHarden() {
   //cout << "BEFORE HARDENING\n";
   //printFormula();
 
-  miniSolver sat_solver;
-  sat_solver.eliminate(true); //no preprocessing due to incremental use of solver
+  SatSolver_uniqp sat_solver {new miniSolver};
+  sat_solver->eliminate(true); //no preprocessing due to incremental use of solver
 
   for(size_t i = 0; i < nHards(); i++) 
-    if(!sat_solver.addClause(getHard(i))) {
+    if(!sat_solver->addClause(getHard(i))) {
       unsat = true;
       if(params.verbosity > 0)
         cout << "c WCNF hardened 0 soft clauses\n";
@@ -823,7 +834,7 @@ void Wcnf::simpleHarden() {
     for(size_t c =0; c < nSofts(); c++) {
       if(soft_clswts[c] >= transitionWts[i] && soft_clswts[c] < maxWt) {
         n++;
-        if(!sat_solver.addClause(getSoft(c))) 
+        if(!sat_solver->addClause(getSoft(c)))
           break;
       }
     }
@@ -831,10 +842,10 @@ void Wcnf::simpleHarden() {
     //DEBUG 
     //cout << "Added " << n << " soft clauses to sat solver\n";
 
-    if(!sat_solver.status())
+    if(!sat_solver->status())
       break;
     maxWt = transitionWts[i];
-    auto canHarden = sat_solver.solvePropBudget(5*1024*1024);
+    auto canHarden = sat_solver->solvePropBudget(5*1024*1024);
     //DEBUG 
     //cout << "sat solver returns " << canHarden << "\n";
 
@@ -1609,7 +1620,7 @@ Weight Wcnf::checkModel(vector<lbool>& ubmodel, int& nfalseSofts, bool final) {
         break;
       }
     if(!isSat) {
-      cout << "c ERROR! WCNF. Model does not satisfy the hards\nc violated hard = [";
+      cout << "c ERROR WCNF. Model does not satisfy the hards\nc violated hard = [";
       for(auto l : hc) 
         cout << l << ", ";
       cout << "]\n";

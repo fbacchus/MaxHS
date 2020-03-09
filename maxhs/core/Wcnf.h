@@ -28,18 +28,30 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <vector>
 #include <limits>
 #include <iostream>
+
+#ifdef GLUCOSE
+#include "glucose/core/SolverTypes.h"
+#else
+#include "minisat/core/SolverTypes.h"
+#endif
+
 #include "maxhs/ds/Packed.h"
 #include "maxhs/core/MaxSolverTypes.h"
-#include "minisat/core/SolverTypes.h"
 #include "maxhs/ifaces/miniSatSolver.h"
 
 using std::cout;
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
+
+
 using Minisat::Lit;
 using Minisat::toInt;
 using Minisat::var;
 using Minisat::l_Undef;
 using Minisat::lbool;
-using MaxHS_Iface::miniSolver;
+using MaxHS_Iface::SatSolver_uniqp;
 
 /* Store a weighted CNF formula */
 enum class MStype { undef, ms, pms, wms, wpms };
@@ -191,7 +203,7 @@ private:
 
   //preprocessing routines
   bool subEqs();
-  vector<Lit> get_binaries(miniSolver& sat_solver);
+  vector<Lit> get_binaries(SatSolver_uniqp& sat_solver);
   vector<Lit> get_units();
   Packed_vecs<Lit> reduce_by_eqs_and_units(Packed_vecs<Lit>& cls, bool softs, 
                                            vector<vector<Lit>>& sccs, vector<Lit> units);
@@ -205,7 +217,7 @@ private:
   Var maxOrigVar() const { return maxorigvar; }     //input variables
   size_t nOrigVars() const { return maxorigvar+1; } //are for private use.
 
-  Packed_vecs<Lit> reduce_by_units(Packed_vecs<Lit>& cls, miniSolver& slv, bool softs);
+  Packed_vecs<Lit> reduce_by_units(Packed_vecs<Lit>& cls, SatSolver_uniqp& slv, bool softs);
   int maxorigvar, maxvar;
   int dimacs_nvars;
   int dimacs_nclauses;

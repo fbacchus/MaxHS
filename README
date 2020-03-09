@@ -13,83 +13,67 @@ Building and installing:
    available from IBM under their academic Initiative program. It is
    free to faculty members and graduate students in academia. 
 
-   try 
-   http://www-03.ibm.com/ibm/university/academic/pub/page/ban_ilog_programming
+   try https://www.ibm.com/academic 
 
-   a google search should find the right site.
-   You apply for their academic initiative program and then then you
-   can download CPLEX and other IBM software. 
+   If that fails aa google search of 'IBM academic initiative' should
+   find the right site.  You apply for their academic initiative
+   program and then then you can download CPLEX and other IBM
+   software.
 
    Note. CPLEX is very useful for many tasks and well worth having
    access to irrespective of MaxHS. 
 
+1) clone maxhs from https://github.com/fbacchus/MaxHS
 
-1) Configure
-------------
-Use "make config VAR=defn" or edit config.mk directly. 
+2) Move into the MaxHS directory and edit the Makefile to
+   properly set the following Makefile variables
 
 REQUIRED VARIABLE SETTINGS:
 ===========================
 
 LINUX_CPLEXLIBDIR=<path to CPLEX library>
    #the directory on your linux system that contains libcplex.a
-   #and libilocplex.a (the makefile does a static build)
+   #and libilocplex.a
 LINUX_CPLEXINCDIR=<path to CPLEX headers>
+
+and if you want to build on macos
 
 DARWIN_CPLEXLIBDIR=<path to CPLEX library>
    #the directory on your MAC system that contains libcplex.a
-   #and libilocplex.a (the makefile does a static build)
+   #and libilocplex.a 
 DARWIN_CPLEXINCDIR=<path to CPLEX headers>
 
 NOTE: you do not have to set both the LINUX_ and DARWIN_ variables, just
 the ones for the operating system you are using. 
 
-RECOMMENDED VARIABLE SETTINGS:
-==============================
-
-prefix=<location for install; default = '/usr/local'>
-  #Root install directory for GNU standard install locations 
-  #finer control can be achieved by modifying the GNU install
-  #variables (e.g., includedir, bindir, etc). See the Makefile
-  #"make install" will put the executable in $(prefix)/bin
-
-  #Change this if you want to install MaxHS (you can also use the
-  #executable directly from the build/release/bin directory), and
-  #you do not want to install it it the system directories
-  
-OPTIONAL VARIABLE SETTINGS:
-==========================
-
-Various compiler settings can be configured, see the Makefile
-
-Notes:
-
-- Multiple configuration steps can be joined into one call to "make
-  config" by appending multiple variable assignments on the same line.
-
-- The configuration is stored in the file "config.mk". Look here if
-  you want to know what the current configuration looks like.
-
-- To reset from defaults simply remove the "config.mk" file or call
-  "make distclean".
-
-- Once configured, recompilation can be done as many times as wanted. 
-
-2) Compile and Build 
+3) Build
 -----------
+In the MaxHS directory execute
 
-make install
+make
+
+4) Run
+---------
+The executable is built in MaxHS/build/release/bin/ if you change to that
+directory you should be able to execute
+
+./maxhs -no-printSoln <maxsat instance file>
+
+use
+./maxhs --help
+or
+./maxhs --help-verb
+
+to obtain a listing of the available parameter settings
 
 ================================================================================
 Directory Overview:
 
 maxhs/                  MaxHs code
-minisat/mtl/            Minsat  Template Library
-minisat/utils/          Minisat helper code (I/O, Parsing, CPU-time, etc)
-minisat/core/           Minisat core solver (does not do simplification)
-doc/                    Documentation...right now try "maxhs --help" ;-<
+minisat/                Minisat SAT solver with changes to make assumptions more
+                        efficient
+glucose/                Glucose SAT solver 
 README
 LICENSE
-
 ================================================================================
 

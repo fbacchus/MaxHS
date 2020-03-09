@@ -30,6 +30,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "maxhs/ifaces/SatSolver.h"
 #include "maxhs/core/Wcnf.h"
 
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
+
 using Minisat::Lit;
 using Minisat::var;
 using Minisat::mkLit;
@@ -72,6 +76,7 @@ public:
 
   //number and sizes
   size_t n_bvars() const { return theWcnf->nSofts(); }
+  size_t n_vars() const { return theWcnf->nVars(); }
   size_t n_blits() const { return n_bvars()*2; }
   Var maxBvar() const { return maxbvar; }
   Var maxvar() const { return std::max(theWcnf->maxVar(), maxbvar); }

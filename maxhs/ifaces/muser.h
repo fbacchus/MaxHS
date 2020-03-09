@@ -35,11 +35,19 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <ostream>
 #include <string>
+#ifdef GLUCOSE
+#include "glucose/simp/SimpSolver.h"
+#include "glucose/core/SolverTypes.h"
+#else
 #include "minisat/simp/SimpSolver.h"
 #include "minisat/core/SolverTypes.h"
+#endif
 #include "maxhs/core/Wcnf.h"
 #include "maxhs/core/Bvars.h"
 
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using Minisat::Lit;
 using Minisat::lbool;

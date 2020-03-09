@@ -28,9 +28,15 @@
 #include <string>
 #include <cstring>
 #include <cmath>
+
+#ifdef GLUCOSE
+#include "glucose/utils/System.h"
+#else
+#include "minisat/utils/System.h"
+#endif
+
 #include "maxhs/ifaces/Cplex.h"
 #include "maxhs/utils/io.h"
-#include "minisat/utils/System.h"
 #include "maxhs/utils/Params.h"
 
 
@@ -41,9 +47,10 @@ using std::cout;
 using std::endl;
 using std::min;
 
-Cplex::Cplex(Bvars& b, vector<lbool>& ubsofts, bool integerWts) :
+Cplex::Cplex(Bvars& b, vector<lbool>& ubmodelsofts, vector<lbool>& ubmodel, bool integerWts) :
   bvars (b),
-  ubModelSofts (ubsofts),
+  ubModelSofts (ubmodelsofts),
+  ubModel (ubmodel),
   env {nullptr},
   mip {nullptr},
   trial_mip {nullptr},
@@ -439,6 +446,7 @@ struct CBInfo {
   double LB;
   double UB;
   double absGap;
+  double cplex_start_ticks;
   bool found_opt;
   bool found_better_soln;
 };
@@ -462,21 +470,29 @@ extern "C" {
       if(status = CPXXgetcallbackinfo(env, cbdata, wherefrom, CPX_CALLBACK_INFO_BEST_INTEGER, &objval))
         info->cplexObject->processError(status, false, "Could not get incumbent value in CPLEX call back");
 
-      //cout << "c CALLBACK have incumbent: objvalue = " << objval << " passed LB = "
-      //<< info->LB << " passed UB = " << info->UB << "\n";
-
       //_LB should be a true lower bound on the cost of this model.
       //if we found a solution within our tolerance, we can stop declaring this solution
       //to be "optimal" (within tolerance).
       //If we have integer weights will also
       if ( fabs(objval - info->LB) <= info->absGap) {
-        printf("c CPLEX Terminating early on found incumbent achieving optimum\n");
+        //printf("c CPLEX Terminating early on found incumbent achieving optimum\n");
         info->found_opt = true;
         return(1);
       }
 
-      if ( info->UB - objval > info->absGap)  {
-        //printf("c Cplex found better incumbent than UB (%f < %f)\n", objval, info->UB);
+      double cplex_current_ticks {};
+      CPXXgettime(env, &cplex_current_ticks);
+
+      /*cout << "c CPLEX start ticks = " << info->cplex_start_ticks
+           << " current ticks = " << cplex_current_ticks
+           << " min tick limit = " << params.cplex_min_ticks
+           << " objective value gap = " << info->UB - objval
+           << " (absgap = " << info->absGap
+           << ")\n";*/
+
+      if ((cplex_current_ticks - info->cplex_start_ticks) >= params.cplex_min_ticks
+          && info->UB - objval > info->absGap)  {
+        printf("c Cplex found better incumbent than UB (%f < %f)\n", objval, info->UB);
         info->found_better_soln = true;
         return(1);
       }
@@ -511,7 +527,11 @@ Weight Cplex::solve_(vector<Lit> &solution, double UB, double timeLimit) {
   if(params.bestmodel_mipstart)
     useBestModelStart(mip);
 
-  CBInfo myloginfo {this, LB, UB, absGap, false, false};
+  double cplex_start_ticks {};
+  if(status = CPXXgettime(env, &cplex_start_ticks))
+    processError(status, false, "Failed to get the Cplex deterministic start time");
+
+  CBInfo myloginfo {this, LB, UB, absGap, cplex_start_ticks, false, false};
   if(status = CPXXsetinfocallbackfunc(env, info_callback, &myloginfo))
     processError(status, false, "Failed to set logging callback function");
 
@@ -813,6 +833,15 @@ void Cplex::useBestModelStart(CPXLPptr this_mip) {
       cplex_vals.push_back(val);
     }
   }
+  for(size_t v = 0; v < bvars.n_vars(); v++)
+      if(!bvars.isBvar(v)) {
+        auto ci = ex2in(v);
+        if(ci != var_Undef) {
+          cplex_vars.push_back(ci);
+          double val = (ubModel[v]==l_True) ? 1.0 : 0.0;
+          cplex_vals.push_back(val);
+        }
+      }
 
   if(!cplex_vars.empty()) {
     if(int status = CPXXaddmipstarts(env, this_mip, 1, cplex_vars.size(), &beg, cplex_vars.data(), cplex_vals.data(), &effort, nullptr))

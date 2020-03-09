@@ -21,11 +21,20 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ***********/
+#ifdef GLUCOSE
+#include "glucose/utils/Options.h"
+#else
 #include "minisat/utils/Options.h"
+#endif
+
 #include "maxhs/utils/Params.h"
 #include <limits>
 #include <iostream>
 using std::cout;
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using namespace Minisat;
 static const char* maxhs = "A: General MaxHS";
@@ -44,6 +53,7 @@ static IntOption    opt_verb(maxhs, "verb", "Verbosity level (0=silent, 1=some, 
 			     "3=debugging output, 4=more debugging output).", 1, IntRange(0, 5));
 static BoolOption   opt_bvardecisions(maxhs, "bvardecisions", "FB: make bvars decision variables.", false);
 static BoolOption   opt_fbeq(maxhs, "fbeq", "FB: Use FbEq theory. Independent of \"coretype\"", false);
+static BoolOption opt_printOptions(maxhs, "printOptions", "Print paramater settings", true);
 static BoolOption opt_printBstSoln(maxhs, "printBstSoln", "Print best solution found", false);
 static BoolOption opt_printSoln(maxhs, "printSoln", "Print solution", true);
 static DoubleOption opt_tolerance(maxhs, "tolerance", "For floating point weights only: return solution when when |soln-cost - lower bound| <= tolerance\n", 
@@ -102,7 +112,7 @@ static IntOption opt_conflicts_from_ub(pop, "ub-conflicts", "FB: Generate confli
 // Sequence of Sat Options
 static DoubleOption opt_optcores_cpu_per(seqOfSat, "optcores-cpu-lim",
 					 "FB: CPU time limit for finding each additional core (-1 == no limit).", 
-					   -1, DoubleRange(-1.0, true,  std::numeric_limits<Weight>::max(), true));
+					   10, DoubleRange(-1.0, true,  std::numeric_limits<Weight>::max(), true));
 static IntOption    opt_nonopt(seqOfSat, "nonopt", "JD: Method for relaxing clauses of current "
 			       "core (0 = pick a random clause, 1 = pick clause appearing in most cores"
 			       ", 2 = relax a fraction of each core (set fraction with \"relaxfrac\" parameter), 3 = remove all clauses in core making next core disjoint.",
@@ -153,6 +163,9 @@ static BoolOption opt_lp_harden(seqOfSat, "lp-harden", "Use LP version of CPLEX 
 //CPLEX Solver Options
 static IntOption opt_cplex_threads(cplex, "cplex-threads", "Allow cplex to use this many threads (1 = sequential processing)", 1, IntRange(1,124));
 static BoolOption opt_cplex_tune(cplex, "cplex-tune", "Use cplex parameter setting recommended by cplex-tune", false);
+static DoubleOption opt_cplex_min_ticks(cplex, "cplex-min-ticks", "Run CPLEX for at least this 1000's of its deterministic ticks can allow CPLEX to find better feasible (non-optimal) solutions", 4.0,
+                                        DoubleRange(1.0, true, std::numeric_limits<double>::max(), false));
+
 
 // //Preprocessing
 static BoolOption opt_preprocess(pre, "preprocess", "Use minisat preprocessor", true);
@@ -195,6 +208,7 @@ void Params::readOptions() {
   prepro_output = opt_prepro_output;
   mverbosity = muser_verb;
 
+  printOptions = opt_printOptions;
   printBstSoln = opt_printBstSoln;
   printSoln = opt_printSoln;
   tolerance = opt_tolerance;
@@ -265,6 +279,7 @@ void Params::readOptions() {
   //cplex limits
   cplex_threads = opt_cplex_threads;
   cplex_tune = opt_cplex_tune;
+  cplex_min_ticks = opt_cplex_min_ticks;
   cplex_data_chk = opt_cplex_data_chk;
   cplex_write_model = opt_cplex_write_model;
   cplex_output = opt_cplex_output;

@@ -25,14 +25,25 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #include <math.h>
 #include <iostream>
 
-#include "maxhs/core/MaxSolverTypes.h"
+#ifdef GLUCOSE
+#include "glucose/utils/ParseUtils.h"
+#include "glucose/core/SolverTypes.h"
+#else
 #include "minisat/utils/ParseUtils.h"
 #include "minisat/core/SolverTypes.h"
+#endif
+
+#include "maxhs/core/MaxSolverTypes.h"
 #include "maxhs/core/MaxSolver.h"
 #include "maxhs/core/Wcnf.h"
 
+
 using std::cout;
 using std::cerr;
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using namespace Minisat;
 using namespace MaxHS;

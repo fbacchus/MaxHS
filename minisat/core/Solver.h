@@ -131,6 +131,8 @@ public:
     double    random_var_freq;
     double    random_seed;
     bool      luby_restart;
+    bool      assump_2nd_process; //Reporcess assumption conflict with one assumption per level.
+    int       averbosity;
     int       ccmin_mode;         // Controls conflict clause minimization (0=none, 1=basic, 2=deep).
     int       phase_saving;       // Controls the level of phase saving (0=none, 1=limited, 2=full).
     bool      rnd_pol;            // Use random polarities for branching heuristics.
@@ -150,12 +152,14 @@ public:
     //
     uint64_t solves, starts, decisions, rnd_decisions, propagations, conflicts;
     uint64_t dec_vars, num_clauses, num_learnts, clauses_literals, learnts_literals, max_literals, tot_literals;
+    uint64_t n_assump_conflicts;
+    double   assump_saved;
 
 protected:
 
     // Helper structures:
     //
-    struct VarData { CRef reason; int level; lbool isAssumed; };
+    struct VarData { CRef reason; int level; lbool isAssumed;};
     static inline VarData mkVarData(CRef cr, int l, lbool a){ VarData d = {cr, l, a}; return d; }
 
     struct Watcher {
@@ -205,13 +209,13 @@ protected:
     Heap<Var,VarOrderLt>order_heap;       // A priority queue of variables ordered with respect to the variable activity.
 
     bool                ok;               // If FALSE, the constraints are already unsatisfiable. No part of the solver state may be used!
+    bool                remove_satisfied; // Indicates whether possibly inefficient linear scan for satisfied clauses should be performed in 'simplify'.
     double              cla_inc;          // Amount to bump next clause with.
     double              var_inc;          // Amount to bump next variable with.
     int                 qhead;            // Head of queue (as index into the trail -- no more explicit propagation queue in MiniSat).
     int                 simpDB_assigns;   // Number of top-level assignments since last execution of 'simplify()'.
     int64_t             simpDB_props;     // Remaining number of propagations that must be made before next execution of 'simplify()'.
     double              progress_estimate;// Set by 'search()'.
-    bool                remove_satisfied; // Indicates whether possibly inefficient linear scan for satisfied clauses should be performed in 'simplify'.
     Var                 next_var;         // Next variable to be created.
     ClauseAllocator     ca;
 
@@ -246,8 +250,10 @@ protected:
     CRef     propagate        ();                                                      // Perform unit propagation. Returns possibly conflicting clause.
     void     cancelUntil      (int level);                                             // Backtrack until a certain level.
     void     analyze          (CRef confl, vec<Lit>& out_learnt, int& out_btlevel);    // (bt = backtrack)
-    //virtual void     analyzeFinal     (Lit p, LSet& out_conflict);                             // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
-    void     analyzeFinal     (Lit p, LSet& out_conflict);                             // COULD THIS BE IMPLEMENTED BY THE ORDINARIY "analyze" BY SOME REASONABLE GENERALIZATION?
+    void     analyzeFinal1     (CRef confl, LSet& out_conflict);
+    void     analyzeFinal1     (Lit p, LSet& out_conflict);
+    void     analyzeFinal2     (CRef confl, LSet& out_conflict);
+    void     analyzeFinal2     (Lit p, LSet& out_conflict);
     bool     litRedundant     (Lit p);                                                 // (helper method for 'analyze()')
     lbool    search           (int nof_conflicts);                                     // Search for a given number of conflicts.
     lbool    solve_           ();                                                      // Main solve method (assumptions given in 'assumptions').
@@ -280,12 +286,13 @@ protected:
     int      level            (Var x) const;
 //
     lbool    isAssumed        (Var x) const;
+    bool     isAssumption     (Var x) const;
+    bool     isAssumption     (Lit p) const;
     bool     isAssumedTrue    (Lit p) const;
     bool     isAssumedFalse   (Lit p) const;
     void     setAssumption    (Lit p);
     void     unsetAssumption  (Lit p);
 //
-    
     double   progressEstimate ()      const; // DELETE THIS ?? IT'S NOT VERY USEFUL ...
     bool     withinBudget     ()      const;
     void     relocAll         (ClauseAllocator& to);
@@ -303,6 +310,10 @@ protected:
     // Returns a random integer 0 <= x < size. Seed must never be 0.
     static inline int irand(double& seed, int size) {
         return (int)(drand(seed) * size); }
+
+private:
+    void     inline af1_mark_conflict(CRef, bool, int&, LSet&);
+    void     inline af2_mark_conflict(CRef, bool, int&, vec<int>&, LSet&);
 };
 
 
@@ -313,16 +324,19 @@ inline CRef Solver::reason(Var x) const { return vardata[x].reason; }
 inline int  Solver::level (Var x) const { return vardata[x].level; }
 
 //Assumptions
-inline lbool Solver::isAssumed(Var x) const { return vardata[x].isAssumed; }
+    inline lbool Solver::isAssumed(Var x) const { return vardata[x].isAssumed; }
+    inline bool Solver::isAssumption(Lit p) const { return isAssumption(var(p)); }
+    inline bool Solver::isAssumption(Var x) const { return vardata[x].isAssumed != l_Undef; }
 
-inline bool  Solver::isAssumedTrue(Lit p) const 
+
+    inline bool  Solver::isAssumedTrue(Lit p) const
     { return sign(p) ? isAssumed(var(p)) == l_False : isAssumed(var(p)) == l_True; }
 
-inline bool  Solver::isAssumedFalse(Lit p) const
+    inline bool  Solver::isAssumedFalse(Lit p) const
     { return sign(p) ? isAssumed(var(p)) == l_True : isAssumed(var(p)) == l_False; }
 
-inline void Solver::setAssumption(Lit p)   { vardata[var(p)].isAssumed = sign(p) ? l_False  : l_True; }
-inline void Solver::unsetAssumption(Lit p) { vardata[var(p)].isAssumed = l_Undef; }
+    inline void Solver::setAssumption(Lit p)   { vardata[var(p)].isAssumed = sign(p) ? l_False  : l_True; }
+    inline void Solver::unsetAssumption(Lit p) { vardata[var(p)].isAssumed = l_Undef; }
 
 inline void Solver::insertVarOrder(Var x) {
     if (!order_heap.inHeap(x) && decision[x]) order_heap.insert(x); }

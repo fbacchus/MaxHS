@@ -25,10 +25,20 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define IO_h
 
 #include <ostream>
+
+#ifdef GLUCOSE
+#include "glucose/core/SolverTypes.h"
+#include "glucose/mtl/Vec.h"
+#else
 #include "minisat/core/SolverTypes.h"
-#include "maxhs/ds/Packed.h"
 #include "minisat/mtl/Vec.h"
-//#include "maxhs/ifaces/SatSolver.h"
+#endif
+
+#include "maxhs/ds/Packed.h"
+
+#ifdef GLUCOSE
+namespace Minisat = Glucose;
+#endif
 
 using std::ostream;
 using std::vector;
@@ -64,6 +74,15 @@ template<typename T>
 ostream& operator<<(ostream& os, const Minisat::vec<T>& v) {
   os << "[ ";
   for(int i = 0; i < v.size(); i++) 
+    os << v[i] << " ";
+  os << "] (" << v.size() << ")";
+  return os;
+}
+
+template<typename T>
+ostream& operator<<(ostream& os, const Minisat::LSet& v) {
+  os << "[ ";
+  for(int i = 0; i < v.size(); i++)
     os << v[i] << " ";
   os << "] (" << v.size() << ")";
   return os;
