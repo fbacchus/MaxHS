@@ -28,35 +28,33 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Bvars::Bvars(const Wcnf* f)
     : theWcnf{f},
+      nBvars{theWcnf->nSofts()},
+      nOvars{theWcnf->nVars()},
       clsBlit{theWcnf->nSofts(), Minisat::lit_Undef},
-      var_types(theWcnf->nVars(), Var_type::not_in_theory),
+      var_types(theWcnf->nVars()),
       mxNum(theWcnf->nVars(), -1) {
-  Var nxtbvar{theWcnf->nVars()};
 
   for (auto& cls : theWcnf->hards())
-    for (auto l : cls) var_types[var(l)] = Var_type::original;
+    for (auto l : cls) var_types[var(l)].original = true;
   for (auto& cls : theWcnf->softs())
-    for (auto l : cls) var_types[var(l)] = Var_type::original;
+    for (auto l : cls) var_types[var(l)].original = true;
 
+  int maxbvar = -1;
   for (size_t i = 0; i < theWcnf->nSofts(); i++) {
     auto scls = theWcnf->softs()[i];
     if (scls.size() == 1)
       clsBlit[i] = ~scls[0];  // blit false means clause must be satisfied
     else
-      clsBlit[i] = mkLit(nxtbvar++);
+      clsBlit[i] = mkLit(make_newVar());
     maxbvar = std::max(maxbvar, var(clsBlit[i]));
   }
 
   bvarCls.resize(maxbvar + 1, -1);
-  for (size_t i = 0; i < theWcnf->nSofts(); i++) bvarCls[var(clsBlit[i])] = i;
-
-  if (n_vars() > var_types.size())
-    var_types.resize(n_vars(), Var_type::not_in_theory);
-
   for (size_t i = 0; i < theWcnf->nSofts(); i++) {
     auto blit = clsBlit[i];
-    var_types[var(blit)] |= Var_type::bvar;
-    if (!sign(blit)) var_types[var(blit)] |= Var_type::core_is_pos;
+    bvarCls[var(clsBlit[i])] = i;
+    var_types[var(blit)].bvar = true;
+    if(!sign(blit)) var_types[var(blit)].core_is_pos = true;
   }
 
   // process mutexes
@@ -64,49 +62,19 @@ Bvars::Bvars(const Wcnf* f)
   for (size_t i = 0; i < theWcnf->get_SCMxs().size(); i++) {
     auto& mx = theWcnf->get_SCMxs()[i];
     if (mx.encoding_lit() != Minisat::lit_Undef) {
-      var_types[var(mx.encoding_lit())] |= Var_type::dvar;
+      var_types[var(mx.encoding_lit())].Var_type::dvar = true;
       mxNum[var(mx.encoding_lit())] = i;
     }
     for (auto l : mx.soft_clause_lits()) {
-      var_types[var(l)] |= Var_type::in_mutex;
-      if (!sign(l)) var_types[var(l)] |= Var_type::orig_core_is_pos;
+      var_types[var(l)].in_mutex = true;
+      if (!sign(l)) var_types[var(l)].orig_core_is_pos = true;
       mxNum[var(l)] = i;
     }
   }
 }
 
-/*
-void Bvars::setOutput(Lit tOutput, Lit next) {
-  if (!isTvar(tOutput)) {
-    cout << "c ERROR, Bvars::setOutput() setting next of a non-totalizer
-literal\n"; exit(1);
-  }
-  if(!(isTvar(next) || next == lit_Undef)) {
-    cout << "c ERROR, Bvars::setOutput() next is invalid\n";
-    exit(1);
-  }
-  int ind = var(tOutput);
-  if(nextOutputM.size() <= static_cast<size_t>(ind))
-    nextOutputM.resize(ind+1, lit_Undef);
-  nextOutputM[ind] = next;
-}
-
-Lit Bvars::nextOutput(Lit tOutput) {
-  if (!isTvar(tOutput)) {
-    cout << "c ERROR, Bvars::nextOutput() asking for next output of a
-non-totalizer\n"; exit(1);
-  }
-  int ind = var(tOutput);
-  if (nextOutputM.size() < static_cast<size_t>(ind)) {
-    cout << "c ERROR, Bvars::nextOutput() asking for a non-set output
-literal\n";
-  }
-  return nextOutputM[ind];
-}
-*/
-
 void Bvars::printVars() {
-  for (int i = 0; i <= maxvar(); i++) {
+  for (size_t i = 0; i < n_vars(); i++) {
     cout << "Var #" << i + 1 << "." << var_types[i] << "\n";
     cout << "is bvar: " << isBvar(i) << "\n";
     if (isBvar(i)) {
@@ -135,15 +103,18 @@ void Bvars::print_var_types() {
     cout << "Var " << i + 1 << " type = " << var_types[i] << "\n";
 }
 
-ostream& operator<<(ostream& os, const Var_type& x) {
-  if (x == Var_type::not_in_theory) os << "not_in_theory, ";
-  if (to_bool(x & Var_type::original)) os << "original, ";
-  if (to_bool(x & Var_type::bvar)) os << "blocking var, ";
-  if (to_bool(x & Var_type::core_is_pos)) os << "positive is core, ";
-  if (to_bool(x & Var_type::in_mutex)) os << "in mutex, ";
-  if (to_bool(x & Var_type::orig_core_is_pos))
-    os << "positive is original core, ";
-  if (to_bool(x & Var_type::dvar)) os << "defined var, ";
-  if (to_bool(x & Var_type::totalizer)) os << "totalizer var ";
+std::ostream& operator<<(std::ostream& os, const Var_type& x) {
+  if (x.original) os << "original ";
+  if (x.bvar) os << "bvar ";
+  if (x.core_is_pos) os << "core_is_pos ";
+  if (x.in_mutex) os << "in_mutex ";
+  if (x.orig_core_is_pos)
+    os << "orig_core_is_pos ";
+  if (x.dvar) os << "dvar ";
+  if (x.summation) os << "summation ";
+  if (!x.original && !x.bvar && !x.core_is_pos
+      && !x.in_mutex && !x.orig_core_is_pos &&
+      !x.dvar && !x.summation) os << "not_in_theory ";
+
   return os;
 }

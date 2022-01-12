@@ -46,10 +46,10 @@ using std::cout;
 using std::endl;
 using std::min;
 
-Cplex::Cplex(Bvars& b, TotalizerManager* t, vector<lbool>& ubmodelsofts,
+Cplex::Cplex(Bvars& b, SumManager* s, vector<lbool>& ubmodelsofts,
              vector<lbool>& ubmodel, bool integerWts)
     : bvars(b),
-      totalizers(t),
+      summations(s),
       ubModelSofts(ubmodelsofts),
       ubModel(ubmodel),
       solver_valid{true},
@@ -96,6 +96,10 @@ Cplex::Cplex(Bvars& b, TotalizerManager* t, vector<lbool>& ubmodelsofts,
     processError(status, false, "Could not set CPLEX Solution Pool limit");
   if (status = CPXXsetintparam(env, CPX_PARAM_SOLNPOOLINTENSITY, 2))
     processError(status, false, "Could not set CPLEX Solution Pool limit");
+
+  //if (status = CPXXsetintparam(env, CPX_PARAM_SCAIND, -1))
+  //  processError(status, false, "Could not set CPLEX Solution Pool limit");
+
   if (params.cplex_tune) {
     cout << "c Using cplex tune parameters\n";
     if (status = CPXXsetintparam(env, CPX_PARAM_MIPEMPHASIS,
@@ -167,14 +171,14 @@ void Cplex::addNewVar(Var ex) {
 
   if (int status = CPXXnewcols(env, mip, 1, &varWt, &lb, &ub, &type, nullptr)) {
     processError(status, false, "Could not create new CPLEX variable");
-    cout << "c WARNING. var = " << ex << " wt = " << varWt << "\n";
+    cout << "c WARNING. var = " << ex << " wt = " << wt_fmt(varWt) << "\n";
   }
 
   if (int status =
           CPXXnewcols(env, linp, 1, &varWt, &lb, &ub, nullptr, nullptr)) {
     processError(status, false,
                  "Could not create new CPLEX variable in trial mip");
-    cout << "c WARNING. var = " << ex << " wt = " << varWt << "\n";
+    cout << "c WARNING. var = " << ex << " wt = " << wt_fmt(varWt) << "\n";
   }
 }
 
@@ -184,7 +188,7 @@ void Cplex::setExUnits(Lit l) {
   if (i >= exUnits.size()) exUnits.resize(i + 1, l_Undef);
   auto val = sign(l) ? l_False : l_True;
   if (exUnits[i] != l_Undef) {
-    if (!totalizers->isToutput(l))
+    if (!summations->isSoutput(l))
       cout << "c WARNING double add of unit to CPLEX lit = " << l << "\n";
     if (exUnits[i] != val)
       cout << "c ERROR: positive and negative units of same variable added to "
@@ -233,9 +237,9 @@ void Cplex::add_clausal_constraint(vector<Lit>& theCon) {
   /*cout << "Cplex adding clause [";
   for(auto l : theCon) {
     cout << l << "[" << getExUnits(l) << ",";
-    if(totalizers->isToutput(l)) {
-      cout << "T:" << totalizers->get_olit_index(l) << "["
-           << totalizers->get_olit_idx(l) << "]";
+    if(summation->isSoutput(l)) {
+      cout << "S:" << summations->get_olit_index(l) << "["
+           << summations->get_olit_idx(l) << "]";
     }
     cout << "], ";
   }
@@ -250,8 +254,8 @@ void Cplex::add_clausal_constraint(vector<Lit>& theCon) {
 
   if (theCon.size() == 1) {
     setExUnits(theCon[0]);
-    if (totalizers->isToutput(theCon[0])) {
-      add_tot_unit(theCon[0]);
+    if (summations->isSoutput(theCon[0])) {
+      add_sum_unit(theCon[0]);
       return;
     } else if (ex2in(theCon[0]) == var_Undef && bvars.isNonCore(theCon[0])) {
       // Non-core forced bvars never seen before need not be added
@@ -266,8 +270,8 @@ void Cplex::add_clausal_constraint(vector<Lit>& theCon) {
   }
 
   for (auto lt : theCon) {
-    // must do ensure_mapping after add_tot_output_defn
-    if (totalizers->isToutput(lt)) add_tot_output_defn(lt);
+    // must do ensure_mapping after add_sum_output_defn
+    if (summations->isSoutput(lt)) add_sum_output_defn(lt);
     ensure_mapping(lt);
   }
   add_processed_clause(theCon);
@@ -287,8 +291,8 @@ void Cplex::add_processed_clause(const vector<Lit>& theCon) {
 
   for (auto lt : theCon) {
     cplex_vars.push_back(ex2in(lt));
-    if (bvars.isCore(lt) || totalizers->isPositiveToutput(lt) ||
-        (!bvars.isBvar(lt) && !totalizers->isToutput(lt) && !sign(lt)))
+    if (bvars.isCore(lt) || summations->isPositiveSoutput(lt) ||
+        (!bvars.isBvar(lt) && !summations->isSoutput(lt) && !sign(lt)))
       cplex_coeff.push_back(1.0);
     else {
       cplex_coeff.push_back(-1.0);
@@ -318,62 +322,62 @@ void Cplex::add_processed_clause(const vector<Lit>& theCon) {
   return;
 }
 
-void Cplex::add_tot_unit(Lit tout) {
-  assert(totalizers->isToutput(tout));
-  assert(getExUnits(tout) == l_True);
-  vector<Lit> forced_tot_outs;
+void Cplex::add_sum_unit(Lit sout) {
+  assert(summations->isSOutput(sout));
+  assert(getExUnits(sout) == l_True);
+  vector<Lit> forced_sum_outs;
 
-  if (totalizers->isPositiveToutput(tout))
-    for (auto idx = totalizers->get_olit_index(tout) - 1; idx >= 0; --idx) {
-      auto t = totalizers->get_olits_from_olit(tout)[idx];
+  if (summations->isPositiveSoutput(sout))
+    for (auto idx = summations->get_olit_index(sout) - 1; idx >= 0; --idx) {
+      auto t = summations->get_olits_from_olit(sout)[idx];
       auto val = getExUnits(t);
       if (val == l_True) continue;
       if (val == l_False) {
         cout
-            << "c ERROR: forced totalizer out already set to opposite value in "
+            << "c ERROR: forced sum out already set to opposite value in "
                "Cplex\n";
         return;
       }
       setExUnits(t);
-      if (ex2in(t) != var_Undef) forced_tot_outs.push_back(t);
+      if (ex2in(t) != var_Undef) forced_sum_outs.push_back(t);
     }
-  else if (totalizers->isNegativeToutput(tout))
-    for (auto idx = totalizers->get_olit_index(tout) + 1;
+  else if (summations->isNegativeSoutput(sout))
+    for (auto idx = summations->get_olit_index(sout) + 1;
          static_cast<size_t>(idx) <
-         totalizers->get_olits_from_olit(tout).size();
+         summations->get_olits_from_olit(sout).size();
          ++idx) {
-      auto t = ~totalizers->get_olits_from_olit(tout)[idx];
+      auto t = ~summations->get_olits_from_olit(sout)[idx];
       auto val = getExUnits(t);
       if (val == l_True) continue;
       if (val == l_False) {
         cout
-            << "c ERROR: forced totalizer out already set to opposite value in "
+            << "c ERROR: forced sum out already set to opposite value in "
                "Cplex\n";
         return;
       }
       setExUnits(t);
-      if (ex2in(t) != var_Undef) forced_tot_outs.push_back(t);
+      if (ex2in(t) != var_Undef) forced_sum_outs.push_back(t);
     }
 
-  for (auto t_forced : forced_tot_outs) add_processed_clause({t_forced});
+  for (auto t_forced : forced_sum_outs) add_processed_clause({t_forced});
 
-  if (ex2in(tout) == var_Undef)
-    // for unseen touts only add the implied summation constraint
-    add_tot_output_constraint(tout);
-  // add_tot_output_defn(tout);
+  if (ex2in(sout) == var_Undef)
+    // for unseen souts only add the implied summation constraint
+    add_sum_output_constraint(sout);
+  // add_sum_output_defn(sout);
 
   else
-    add_processed_clause({tout});
+    add_processed_clause({sout});
 }
 
-void Cplex::add_tot_output_constraint(Lit tout) {
-  // add only touts constraint on its input bvars.
-  assert(totalizers->isToutput(tout));
-  assert(ex2in(tout) == var_Undef);
-  assert(getExUnits(tout) == l_True);
+void Cplex::add_sum_output_constraint(Lit sout) {
+  // add only souts constraint on its input bvars.
+  assert(summations->isSOutput(sout));
+  assert(ex2in(sout) == var_Undef);
+  assert(getExUnits(sout) == l_True);
 
-  // add constraint in terms of positive totalizer
-  if (totalizers->isNegativeToutput(tout)) tout = ~tout;
+  // add constraint in terms of positive sum
+  if (summations->isNegativeSoutput(sout)) sout = ~sout;
   // Construct cplex constraints
   vector<int> cplex_vars{};
   vector<double> cplex_coeff{};
@@ -381,12 +385,12 @@ void Cplex::add_tot_output_constraint(Lit tout) {
   double rhs;
   CPXNNZ beg{0};
   int nt{0}, nf{0};
-  int tout_idx{totalizers->get_olit_index(tout)};
-  int tout_coeff{tout_idx + 1};
-  int tmax{static_cast<int>(totalizers->get_olits_from_olit(tout).size())};
+  int sout_idx{summations->get_olit_index(sout)};
+  int sout_coeff{sout_idx + 1};
+  int tmax{static_cast<int>(summations->get_olits_from_olit(sout).size())};
 
   // add unvalued inputs to cplex constraint.
-  for (auto l : totalizers->get_ilits_from_olit(tout)) {
+  for (auto l : summations->get_ilits_from_olit(sout)) {
     assert(bvars.isCore(l));
     auto val = getExUnits(l);
     if (val == l_True) {
@@ -402,16 +406,16 @@ void Cplex::add_tot_output_constraint(Lit tout) {
     cplex_coeff.push_back(1.0);
   }
   if (cplex_vars.empty()) {
-    assert(getExUnits(tout) != l_True || tout_coeff <= nt);
-    assert(getExUnits(tout) != l_False || tout_coeff > nt);
+    assert(getExUnits(sout) != l_True || sout_coeff <= nt);
+    assert(getExUnits(sout) != l_False || sout_coeff > nt);
     return;
   }
   // 2. Add cplex constraints.
-  if (getExUnits(tout) == l_True && nt < tout_coeff) {
+  if (getExUnits(sout) == l_True && nt < sout_coeff) {
     sense = 'G';
-    rhs = tout_coeff - nt;
+    rhs = sout_coeff - nt;
     if (cplex_vars.size() < rhs) {
-      cout << "c ERROR in add_tout_constraint. Can't have " << rhs
+      cout << "c ERROR in add_sout_constraint. Can't have " << rhs
            << " tins true since " << nf << " out of " << tmax
            << " are already false\n";
       return;
@@ -420,45 +424,45 @@ void Cplex::add_tot_output_constraint(Lit tout) {
                                  &sense, &beg, cplex_vars.data(),
                                  cplex_coeff.data(), nullptr, nullptr)) {
       processError(status, false,
-                   "add_tout_constraint could not create CPLEX (A) constraint");
+                   "add_sout_constraint could not create CPLEX (A) constraint");
     }
     if (int status = CPXXaddrows(env, linp, 0, 1, cplex_vars.size(), &rhs,
                                  &sense, &beg, cplex_vars.data(),
                                  cplex_coeff.data(), nullptr, nullptr))
       processError(status, false,
-                   "add_tout_constraint could not create trial CPLEX (A) "
+                   "add_sout_constraint could not create trial CPLEX (A) "
                    "constraint");
-  } else if (getExUnits(tout) == l_False &&
-             static_cast<int>(cplex_vars.size()) >= (tout_coeff - nt)) {
-    // constraint is trivial if less than tout_coeff-nt tins are left
-    rhs = tout_coeff - nt - 1;  //'L' is <= not <
+  } else if (getExUnits(sout) == l_False &&
+             static_cast<int>(cplex_vars.size()) >= (sout_coeff - nt)) {
+    // constraint is trivial if less than sout_coeff-nt tins are left
+    rhs = sout_coeff - nt - 1;  //'L' is <= not <
     sense = 'L';
     if (int status = CPXXaddrows(env, mip, 0, 1, cplex_vars.size(), &rhs,
                                  &sense, &beg, cplex_vars.data(),
                                  cplex_coeff.data(), nullptr, nullptr)) {
       processError(status, false,
-                   "add_tout_constraint could not create CPLEX (B) constraint");
+                   "add_sout_constraint could not create CPLEX (B) constraint");
     }
     if (int status = CPXXaddrows(env, linp, 0, 1, cplex_vars.size(), &rhs,
                                  &sense, &beg, cplex_vars.data(),
                                  cplex_coeff.data(), nullptr, nullptr))
       processError(
           status, false,
-          "add_tout_constraint could not create trial CPLEX (B) constraint");
+          "add_sout_constraint could not create trial CPLEX (B) constraint");
   }
   return;
 }
 
-void Cplex::add_tot_output_defn(Lit tout) {
-  assert(totalizers->isToutput(tout));
-  if (ex2in(tout) != var_Undef)  // defn already in place.
+void Cplex::add_sum_output_defn(Lit sout) {
+  assert(summations->isSOutput(sout));
+  if (ex2in(sout) != var_Undef)  // defn already in place.
     return;
-  // add defn in terms of positive totalizer
-  if (totalizers->isNegativeToutput(tout)) tout = ~tout;
+  // add defn in terms of positive sum
+  if (summations->isNegativeSoutput(sout)) sout = ~sout;
 
   // add cplex constraints capturing the equivalence between
-  // a totalizer output and its inputs
-  // 1. check if the defn would be subsumed by a superseeding tout
+  // a sum output and its inputs
+  // 1. check if the defn would be subsumed by a superseeding sout
 
   vector<int> cplex_vars{};
   vector<double> cplex_coeff{};
@@ -466,13 +470,13 @@ void Cplex::add_tot_output_defn(Lit tout) {
   double rhs;
   CPXNNZ beg{0};
   int nt{0}, nf{0};
-  int tout_idx{totalizers->get_olit_index(tout)};
-  int tout_coeff{tout_idx + 1};
-  int tmax{static_cast<int>(totalizers->get_olits_from_olit(tout).size())};
+  int sout_idx{summations->get_olit_index(sout)};
+  int sout_coeff{sout_idx + 1};
+  int tmax{static_cast<int>(summations->get_olits_from_olit(sout).size())};
 
   // add \sum unvalued inputs to cplex constraint.
-  for (auto l : totalizers->get_ilits_from_olit(tout)) {
-    assert(bvars.isCore(l) || totalizers->isPositiveToutput(l));
+  for (auto l : summations->get_ilits_from_olit(sout)) {
+    assert(bvars.isCore(l) || summations->isPositiveSoutput(l));
     auto val = getExUnits(l);
     if (val == l_True) {
       ++nt;
@@ -487,41 +491,41 @@ void Cplex::add_tot_output_defn(Lit tout) {
     cplex_coeff.push_back(1.0);
   }
   if (cplex_vars.empty()) {
-    assert(getExUnits(tout) != l_True || tout_coeff <= nt);
-    assert(getExUnits(tout) != l_False || tout_coeff > nt);
+    assert(getExUnits(sout) != l_True || sout_coeff <= nt);
+    assert(getExUnits(sout) != l_False || sout_coeff > nt);
     return;
   }
 
   // 2. Add cplex constraints.
-  //   Tout <==> \sum in >= tout_coeff
+  //   Sout <==> \sum in >= sout_coeff
   //
-  // A) Tout ==> \sum in >= tout_coeff
-  //    CPLEX: \sum_in - tout_coeff * Tout >= 0
-  //         Tout = 1 ==> \sum in >= tout_coeff; Tout = 0 ==> trivial
+  // A) Sout ==> \sum in >= sout_coeff
+  //    CPLEX: \sum_in - sout_coeff * sout >= 0
+  //         sout = 1 ==> \sum in >= sout_coeff; Sout = 0 ==> trivial
   //         constraint
   //    We sum over only unvalued inputs so we can subtract number true (nt)
-  //    from both sizes FINAL CPLEX constraint: \sum unvalued_in - coeff*Tout
-  //    >= -nt (A) is trivial if nt >= tout_coeff
-  // if Tout is TRUE add only \sum in >= tout_coeff
+  //    from both sizes FINAL CPLEX constraint: \sum unvalued_in - coeff*Sout
+  //    >= -nt (A) is trivial if nt >= sout_coeff
+  // if Sout is TRUE add only \sum in >= sout_coeff
 
-  if (nt < tout_coeff &&
-      getExUnits(tout) != l_False) {  // non-trivial constraint
+  if (nt < sout_coeff &&
+      getExUnits(sout) != l_False) {  // non-trivial constraint
     sense = 'G';
     rhs = -nt;
-    bool tout_added{false};
-    if (getExUnits(tout) == l_Undef) {
-      ensure_mapping(var(tout));
-      cplex_vars.push_back(ex2in(tout));
-      cplex_coeff.push_back(-tout_coeff);
-      tout_added = true;
-    } else {  // tout is TRUE
-      assert(getExUnits(tout) == l_True);
-      rhs += tout_coeff;
+    bool sout_added{false};
+    if (getExUnits(sout) == l_Undef) {
+      ensure_mapping(var(sout));
+      cplex_vars.push_back(ex2in(sout));
+      cplex_coeff.push_back(-sout_coeff);
+      sout_added = true;
+    } else {  // sout is TRUE
+      assert(getExUnits(sout) == l_True);
+      rhs += sout_coeff;
     }
 
-    /*cout << "Adding totalizer defn (A)\n"
-         << tout << "[" << tout_coeff << ":" << getExUnits(tout) << ":"
-         << totalizers->get_olit_idx(tout) << "]: ";
+    /*cout << "Adding sum defn (A)\n"
+         << sout << "[" << sout_coeff << ":" << getExUnits(sout) << ":"
+         << summations->get_olit_idx(sout) << "]: ";
     for (size_t i = 0; i < cplex_vars.size(); ++i)
       cout << cplex_coeff[i] << "*" << in2ex(cplex_vars[i]) << " + ";
       cout << sense << " " << rhs << "\n";*/
@@ -530,48 +534,48 @@ void Cplex::add_tot_output_defn(Lit tout) {
                                  &sense, &beg, cplex_vars.data(),
                                  cplex_coeff.data(), nullptr, nullptr)) {
       processError(status, false,
-                   "add_tot_output_defn could not create CPLEX (A) constraint");
+                   "add_sum_output_defn could not create CPLEX (A) constraint");
     }
     if (int status = CPXXaddrows(env, linp, 0, 1, cplex_vars.size(), &rhs,
                                  &sense, &beg, cplex_vars.data(),
                                  cplex_coeff.data(), nullptr, nullptr))
       processError(status, false,
-                   "add_tot_output_defn could not create trial CPLEX (A) "
+                   "add_sum_output_defn could not create trial CPLEX (A) "
                    "constraint");
-    if (tout_added) {
+    if (sout_added) {
       cplex_vars.pop_back();
       cplex_coeff.pop_back();
     }
   }
-  //(B) \sum_in >= tout_coeff ==> TOut
-  //    == TOut = 0 ==> \sum_in < tout_coeff
-  //    == TOut = 0 ==> \sum_in <= tout_idx
+  //(B) \sum_in >= sout_coeff ==> Sout
+  //    == Sout = 0 ==> \sum_in < sout_coeff
+  //    == Sout = 0 ==> \sum_in <= sout_idx
   //
-  //    CPLEX: \sum in - (max - tout_idx)*Tout <= tout_idx
-  //         == \sum in -max*Tout + tout_idx*Tout <= tout_idx
-  //         Tout = 1: sum in -max <= 0 -- trivial
-  //         Tout = 0: \sum_in <= tout_idx <==> \sum_in < tout_coeff
+  //    CPLEX: \sum in - (max - sout_idx)*Sout <= sout_idx
+  //         == \sum in -max*Sout + sout_idx*Sout <= sout_idx
+  //         Sout = 1: sum in -max <= 0 -- trivial
+  //         Sout = 0: \sum_in <= sout_idx <==> \sum_in < sout_coeff
   // As in (A) subtract nt from each side:
-  //    FINAL CPLEX: \sum unvalued_in - (max-tout_idx)*TOut <= tout_idx - nt
+  //    FINAL CPLEX: \sum unvalued_in - (max-sout_idx)*Sout <= sout_idx - nt
   // We know that sum_in <= max - nf
-  //     so TOut = 0 ==> \sum_in < tout_coeff becomes trival if we already
-  //     have \sum_in < tout_coeff so max-nf < tout_coeff means constraint
-  //     would be trivial and max-nf >= tout_coeff is when constraint is
+  //     so Sout = 0 ==> \sum_in < sout_coeff becomes trival if we already
+  //     have \sum_in < sout_coeff so max-nf < sout_coeff means constraint
+  //     would be trivial and max-nf >= sout_coeff is when constraint is
   //     non-trivial
-  if ((tmax - nf) >= tout_coeff && getExUnits(tout) != l_True) {
-    rhs = tout_idx - nt;
+  if ((tmax - nf) >= sout_coeff && getExUnits(sout) != l_True) {
+    rhs = sout_idx - nt;
     sense = 'L';
-    if (getExUnits(tout) == l_Undef) {
-      ensure_mapping(var(tout));
-      cplex_vars.push_back(ex2in(tout));
-      cplex_coeff.push_back(-(tmax - tout_idx));
+    if (getExUnits(sout) == l_Undef) {
+      ensure_mapping(var(sout));
+      cplex_vars.push_back(ex2in(sout));
+      cplex_coeff.push_back(-(tmax - sout_idx));
     } else {
-      assert(getExUnits(tout) == l_False);
+      assert(getExUnits(sout) == l_False);
     }
 
-    /*cout << "Adding totalizer defn (B)\n"
-         << tout << "[" << tout_coeff << ":" << getExUnits(tout) << ":"
-         << totalizers->get_olit_idx(tout) << "]: ";
+    /*cout << "Adding sum defn (B)\n"
+         << sout << "[" << sout_coeff << ":" << getExUnits(sout) << ":"
+         << summations->get_olit_idx(sout) << "]: ";
     for (size_t i = 0; i < cplex_vars.size(); ++i)
       cout << cplex_coeff[i] << "*" << in2ex(cplex_vars[i]) << " + ";
       cout << sense << " " << rhs << "\n";*/
@@ -580,14 +584,14 @@ void Cplex::add_tot_output_defn(Lit tout) {
                                  &sense, &beg, cplex_vars.data(),
                                  cplex_coeff.data(), nullptr, nullptr)) {
       processError(status, false,
-                   "add_tot_output_defn could not create CPLEX (B) constraint");
+                   "add_sum_output_defn could not create CPLEX (B) constraint");
     }
     if (int status = CPXXaddrows(env, linp, 0, 1, cplex_vars.size(), &rhs,
                                  &sense, &beg, cplex_vars.data(),
                                  cplex_coeff.data(), nullptr, nullptr))
       processError(
           status, false,
-          "add_tot_output_defn could not create trial CPLEX (B) constraint");
+          "add_sum_output_defn could not create trial CPLEX (B) constraint");
   }
   return;
 }
@@ -875,8 +879,8 @@ Weight Cplex::solve_(vector<Lit>& solution, double UB, double timeLimit) {
   int status;
 
   // DEBUG
-  // cout << "c Cplex solve passed UB = " << UB << " current LB = " << LB <<
-  // "\n";
+   cout << "c Cplex solve passed UB = " << UB << " current LB = " << LB <<
+   "\n";
 
   timeLimit = (timeLimit < 0) ? 1e+75 : timeLimit;
   if (status = CPXXsetdblparam(env, CPX_PARAM_TILIM, timeLimit))
@@ -907,12 +911,12 @@ Weight Cplex::solve_(vector<Lit>& solution, double UB, double timeLimit) {
   // Check Call backs.
   if (myloginfo.found_opt) {
     if (params.verbosity > 0)
-      cout << "c found incumbent of obj cost = " << LB << "\n";
+      cout << "c found incumbent of obj cost = " << wt_fmt(LB) << "\n";
     return getSolution(solution, true);
   }
   if (myloginfo.found_better_soln) {
     if (params.verbosity > 0)
-      cout << "c found incumbent of cost better than UB (= " << UB << ")\n";
+      cout << "c found incumbent of cost better than UB (= " << wt_fmt(UB) << ")\n";
     return getSolution(solution, false);
   }
 
@@ -1118,8 +1122,8 @@ Weight Cplex::getSolution(vector<Lit>& solution, bool optimal) {
 
 Weight Cplex::greedySolution(vector<Lit>& solution, int denom) {
   /* Round LP solution to greedy solution */
-  vector<Weight> lp_sol;
-  vector<Weight> red_costs_dummy;
+  vector<double> lp_sol;
+  vector<double> red_costs_dummy;
   vector<Var> cplex_vars_dummy;
   Weight greedyCost =
       solve_lp_relaxation(lp_sol, red_costs_dummy, cplex_vars_dummy);

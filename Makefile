@@ -12,6 +12,10 @@ all: r
 ## Cplex library location (configure these variables)
 LINUX_CPLEXLIBDIR   ?= /w/63/fbacchus/CPLEX_Studio1210/cplex/lib/x86-64_linux/static_pic
 LINUX_CPLEXINCDIR   ?= /w/63/fbacchus/CPLEX_Studio1210/cplex/include
+
+## Cplex libary on mac vm
+LINUXVM_CPLEXLIBDIR   ?= /home/fbacchus/CPLEX_Studio1210/cplex/lib/x86-64_linux/static_pic
+LINUXVM_CPLEXINCDIR   ?= /home/fbacchus/CPLEX_Studio1210/cplex/include
 #
 #If you want to build on macos
 DARWIN_CPLEXLIBDIR   ?= /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio1210/cplex/lib/x86-64_osx/static_pic/
@@ -25,6 +29,10 @@ ifeq "$(shell uname)" "Darwin"
 CPLEXLIBDIR   =$(DARWIN_CPLEXLIBDIR)
 CPLEXINCDIR   =$(DARWIN_CPLEXINCDIR)
 endif
+ifeq "$(shell hostname)" "ubuntu-vm"
+CPLEXLIBDIR   =$(LINUXVM_CPLEXLIBDIR)
+CPLEXINCDIR   =$(LINUXVM_CPLEXINCDIR)
+endif
 
 # Directory to store object files, libraries, executables, and dependencies:
 BUILD_DIR      ?= build
@@ -32,20 +40,17 @@ BUILD_DIR      ?= build
 # Include debug-symbols in release builds?
 #MAXHS_RELSYM ?= -g
 
-# Sat solver you can use minisat of glucose. minisat is faster.for maxhs
-SATSOLVER = minisat
-#SATSOLVER = glucose
+MAXHS_REL    ?= -O3 -DNDEBUG -DNCONTRACTS -DNTRACING
+#MAXHS_REL    += -DLOGGING
+#MAXHS_REL   += -DQUITE
+#MAXHS_DEB    ?= -O0 -DDEBUG -D_GLIBCXX_DEBUG -ggdb
+MAXHS_DEB    ?= -O0 -DDEBUG -ggdb
+MAXHS_PRF    ?= -O3 -DNDEBUG
 
-MAXHS_REL    ?= -O3 -flto -D NDEBUG
-MAXHS_DEB    ?= -O0 -D DEBUG -D_GLIBCXX_DEBUG -ggdb
-MAXHS_PRF    ?= -O3 -D NDEBUG
 
-ifeq "$(SATSOLVER)" "glucose"
-MAXHS_REL    += -D GLUCOSE
-MAXHS_DEB    += -D GLUCOSE
-MAXHS_PRF    += -D GLUCOSE
+ifneq "$(CXX)" "clang++"
+MAXHS_REL    += -flto 
 endif
-
 # Target file names
 MAXHS      = maxhs#       Name of Maxhs main executable.
 MAXHS_SLIB = lib$(MAXHS).a#  Name of Maxhs static library.
@@ -53,11 +58,10 @@ MAXHS_SLIB = lib$(MAXHS).a#  Name of Maxhs static library.
 #-DIL_STD is a IBM/CPLEX issue
 
 MAXHS_CXXFLAGS = -DIL_STD -I. -I$(CPLEXINCDIR)
-MAXHS_CXXFLAGS += -D __STDC_LIMIT_MACROS -D __STDC_FORMAT_MACROS 
 MAXHS_CXXFLAGS += -Wall -Wno-parentheses -Wextra -Wno-deprecated
 MAXHS_CXXFLAGS += -std=c++14
 
-MAXHS_LDFLAGS  = -Wall -lz -L$(CPLEXLIBDIR) -lcplex -lpthread -ldl
+MAXHS_LDFLAGS  = -Wall -lz -L$(CPLEXLIBDIR) -lcplex -lpthread -ldl -flto
 
 ECHO=@echo
 
@@ -67,21 +71,14 @@ else
 VERB=
 endif
 
-SRCS = $(wildcard $(SATSOLVER)/core/*.cc) $(wildcard $(SATSOLVER)/simp/*.cc) $(wildcard $(SATSOLVER)/utils/*.cc) \
-       $(wildcard maxhs/core/*.cc) $(wildcard maxhs/ifaces/*.cc) \
-       $(wildcard maxhs/utils/*.cc)
+MAXHS_SRCS = $(wildcard maxhs/core/*.cc) $(wildcard maxhs/ifaces/*.cc) $(wildcard maxhs/utils/*.cc) \
+             $(wildcard minisat/utils/*.cc)
+SATSOLVER_SRCS = $(wildcard cadical/src/*.cpp)
 
-ALLSRCS = $(wildcard minisat/core/*.cc) $(wildcard minisat/simp/*.cc) $(wildcard minisat/utils/*.cc) \
-$(wildcard glucose/core/*.cc) $(wildcard glucose/simp/*.cc) $(wildcard glucose/utils/*.cc) \
-$(wildcard maxhs/core/*.cc) $(wildcard maxhs/ifaces/*.cc) \
-$(wildcard maxhs/utils/*.cc)
-
-SATSOLVER_HDRS = $(wildcard $(SATSOLVER)/mtl/*.h) $(wildcard $(SATSOLVER)/core/*.h) \
-       $(wildcard $(SATSOLVER)/utils/*.h) $(wildcard $(SATSOLVER)/simp/*.h)
-MAXHS_HDRS = $(wildcard maxhs/core/*.h) $(wildcard maxhs/ifaces/*.h) \
-       $(wildcard maxhs/ds/*.h) $(wildcard maxhs/utils/*.h) 
-
-OBJS = $(filter-out %Main.o, $(SRCS:.cc=.o))
+OBJS = $(filter-out %Main.o, $(MAXHS_SRCS:.cc=.o))
+ALLOBJS = $(MAXHS_SRCS:.cc=.o)
+OBJS += $(filter-out %cadical.o %mobical.o, $(SATSOLVER_SRCS:.cpp=.o))
+ALLOBJS += $(SATSOLVER_SRCS:.cpp=.o)
 
 r:	$(BUILD_DIR)/release/bin/$(MAXHS)
 d:	$(BUILD_DIR)/debug/bin/$(MAXHS)
@@ -91,10 +88,9 @@ lr:	$(BUILD_DIR)/release/lib/$(MAXHS_SLIB)
 ld:	$(BUILD_DIR)/debug/lib/$(MAXHS_SLIB)
 lp:	$(BUILD_DIR)/profile/lib/$(MAXHS_SLIB)
 
-
 ## Build-type Compile-flags:
-$(BUILD_DIR)/release/%.o:			MAXHS_CXXFLAGS +=$(MAXHS_REL) $(MAXHS_RELSYM)
-$(BUILD_DIR)/debug/%.o:				MAXHS_CXXFLAGS +=$(MAXHS_DEB) -ggdb
+$(BUILD_DIR)/release/%.o:           MAXHS_CXXFLAGS +=$(MAXHS_REL) $(MAXHS_RELSYM)
+$(BUILD_DIR)/debug/%.o:				MAXHS_CXXFLAGS +=$(MAXHS_DEB)
 $(BUILD_DIR)/profile/%.o:			MAXHS_CXXFLAGS +=$(MAXHS_PRF) -pg
 
 ## Build-type Link-flags:
@@ -106,16 +102,21 @@ $(BUILD_DIR)/release/bin/$(MAXHS):		MAXHS_LDFLAGS += $(MAXHS_RELSYM)
 
 ## Executable dependencies
 $(BUILD_DIR)/release/bin/$(MAXHS):	 	$(BUILD_DIR)/release/maxhs/core/Main.o $(foreach o,$(OBJS),$(BUILD_DIR)/release/$(o))
-$(BUILD_DIR)/debug/bin/$(MAXHS):	 	$(BUILD_DIR)/debug/maxhs/core/Main.o $(BUILD_DIR)/debug/lib/$(MAXHS_SLIB)
-$(BUILD_DIR)/profile/bin/$(MAXHS):	 	$(BUILD_DIR)/profile/maxhs/core/Main.o $(BUILD_DIR)/profile/lib/$(MAXHS_SLIB)
+$(BUILD_DIR)/debug/bin/$(MAXHS):	 	$(BUILD_DIR)/debug/maxhs/core/Main.o $(foreach o,$(OBJS),$(BUILD_DIR)/debug/$(o))
+#$(BUILD_DIR)/debug/bin/$(MAXHS):	 	$(BUILD_DIR)/debug/maxhs/core/Main.o $(BUILD_DIR)/debug/lib/$(MAXHS_SLIB)
+#$(BUILD_DIR)/profile/bin/$(MAXHS):	 	$(BUILD_DIR)/profile/maxhs/core/Main.o $(BUILD_DIR)/profile/lib/$(MAXHS_SLIB)
 
 ## Library dependencies
-$(BUILD_DIR)/release/lib/$(MAXHS_SLIB):	$(foreach o,$(OBJS),$(BUILD_DIR)/release/$(o))
-$(BUILD_DIR)/debug/lib/$(MAXHS_SLIB):		$(foreach o,$(OBJS),$(BUILD_DIR)/debug/$(o))
-$(BUILD_DIR)/profile/lib/$(MAXHS_SLIB):	$(foreach o,$(OBJS),$(BUILD_DIR)/profile/$(o))
+#$(BUILD_DIR)/release/lib/$(MAXHS_SLIB):	$(foreach o,$(OBJS),$(BUILD_DIR)/release/$(o))
+#$(BUILD_DIR)/debug/lib/$(MAXHS_SLIB):		$(foreach o,$(OBJS),$(BUILD_DIR)/debug/$(o))
+#$(BUILD_DIR)/profile/lib/$(MAXHS_SLIB):	$(foreach o,$(OBJS),$(BUILD_DIR)/profile/$(o))
 
 ## Compile rules 
 $(BUILD_DIR)/release/%.o:	%.cc
+	$(ECHO) Compiling: $@
+	$(VERB) mkdir -p $(dir $@)
+	$(VERB) $(CXX) $(MAXHS_CXXFLAGS) $(CXXFLAGS) -c -o $@ $< -MMD -MF $(BUILD_DIR)/release/$*.d
+$(BUILD_DIR)/release/%.o:	%.cpp
 	$(ECHO) Compiling: $@
 	$(VERB) mkdir -p $(dir $@)
 	$(VERB) $(CXX) $(MAXHS_CXXFLAGS) $(CXXFLAGS) -c -o $@ $< -MMD -MF $(BUILD_DIR)/release/$*.d
@@ -124,11 +125,19 @@ $(BUILD_DIR)/profile/%.o:	%.cc
 	$(ECHO) Compiling: $@
 	$(VERB) mkdir -p $(dir $@)
 	$(VERB) $(CXX) $(MAXHS_CXXFLAGS) $(CXXFLAGS) -c -o $@ $< -MMD -MF $(BUILD_DIR)/profile/$*.d
+$(BUILD_DIR)/profile/%.o:	%.cpp
+	$(ECHO) Compiling: $@
+	$(VERB) mkdir -p $(dir $@)
+	$(VERB) $(CXX) $(MAXHS_CXXFLAGS) $(CXXFLAGS) -c -o $@ $< -MMD -MF $(BUILD_DIR)/release/$*.d
 
 $(BUILD_DIR)/debug/%.o:	%.cc
 	$(ECHO) Compiling: $@
 	$(VERB) mkdir -p $(dir $@)
 	$(VERB) $(CXX) $(MAXHS_CXXFLAGS) $(CXXFLAGS) -c -o $@ $< -MMD -MF $(BUILD_DIR)/debug/$*.d
+$(BUILD_DIR)/debug/%.o:	%.cpp
+	$(ECHO) Compiling: $@
+	$(VERB) mkdir -p $(dir $@)
+	$(VERB) $(CXX) $(MAXHS_CXXFLAGS) $(CXXFLAGS) -c -o $@ $< -MMD -MF $(BUILD_DIR)/release/$*.d
 
 ## Linking rule
 $(BUILD_DIR)/release/bin/$(MAXHS) $(BUILD_DIR)/debug/bin/$(MAXHS) $(BUILD_DIR)/profile/bin/$(MAXHS):
@@ -141,13 +150,14 @@ $(BUILD_DIR)/release/bin/$(MAXHS) $(BUILD_DIR)/debug/bin/$(MAXHS) $(BUILD_DIR)/p
 	$(ECHO) Linking Static Library: $@
 	$(VERB) mkdir -p $(dir $@)
 	$(VERB) $(AR) -rcs $@ $^
+
 clean:
-	rm -f $(foreach t, release debug profile, $(foreach o, $(ALLSRCS:.cc=.o), $(BUILD_DIR)/$t/$o)) \
-          $(foreach t, release debug profile, $(foreach d, $(ALLSRCS:.cc=.d), $(BUILD_DIR)/$t/$d)) \
-	  $(foreach t, release debug profile, $(BUILD_DIR)/$t/bin/$(MAXHS)) \
-	  $(foreach t, release debug profile, $(BUILD_DIR)/$t/lib/$(MAXHS_SLIB))
+	rm -f $(foreach t, release debug profile, $(foreach o, $(ALLOBJS), $(BUILD_DIR)/$t/$o)) \
+      $(foreach t, release debug profile, $(foreach d, $(ALLOBJS:.o=.d), $(BUILD_DIR)/$t/$d)) \
+	  $(foreach t, release debug profile, $(BUILD_DIR)/$t/bin/$(MAXHS))\
+
 
 ## Include generated dependencies
--include $(foreach s, $(SRCS:.cc=.d), $(BUILD_DIR)/release/$s)
--include $(foreach s, $(SRCS:.cc=.d), $(BUILD_DIR)/debug/$s)
--include $(foreach s, $(SRCS:.cc=.d), $(BUILD_DIR)/profile/$s)
+DEPS = $(foreach b, release, $(foreach d, $(ALLOBJS:.o=.d), $(BUILD_DIR)/$b/$d))
+
+-include $(DEPS)

@@ -56,6 +56,8 @@ class Graph {
   void addEdge(Var v1, Var v2, Weight w);
   int get_n_vars() { return n_vars; }
   void addCluster(const vector<Var>& cluster);
+  void combine_nodes(const vector<vector<Var>>& vars_to_combine);
+
   bool in_graph(Var v) {
     return (static_cast<size_t>(v) < var_to_nid.size() &&
             var_to_nid[v] != NONE);
@@ -91,6 +93,7 @@ class Graph {
     Weight internal_edge_wt{0.0};
     Weight total_edge_wt{0.0};
     vector<int> nids;
+    int n_vars;
   };
   friend std::ostream& operator<<(std::ostream&, const Component&);
 
@@ -122,14 +125,14 @@ inline std::ostream& operator<<(std::ostream& os, const Graph::Edge& e) {
 }
 
 inline std::ostream& operator<<(std::ostream& os, const Graph::Node& n) {
-  std::cout << "Node(" << n.nid << ", iwt=" << n.internal_edge_wt
-            << ", twt=" << n.total_edge_wt << " cid=" << n.cid
+  std::cout << "Node(" << n.nid << ", iwt=" << wt_fmt(n.internal_edge_wt)
+            << ", twt=" << wt_fmt(n.total_edge_wt) << " cid=" << n.cid
             << ") cnf_vars =" << n.cnf_vars << " edges =" << n.edges;
   return os;
 }
 
 inline std::ostream& operator<<(std::ostream& os, const Graph::Component& c) {
-  std::cout << "comp(iwt=" << c.internal_edge_wt << ", twt=" << c.total_edge_wt
+  std::cout << "comp(iwt=" << wt_fmt(c.internal_edge_wt) << ", twt=" << wt_fmt(c.total_edge_wt)
             << ") nids =" << c.nids;
   return os;
 };

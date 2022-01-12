@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <algorithm>
 #include <iostream>
+#include "maxhs/utils/io.h"
 
 using std::cout;
 using std::vector;
@@ -48,13 +49,12 @@ int Graph::varToNid(Var v) {
 }
 
 void Graph::addCluster(const vector<Var>& cluster) {
-  if(cluster.empty())
-    return;
+  if (cluster.empty()) return;
   n_vars += cluster.size();
   int nid = nodes.size();
-  for(auto v : cluster) {
-    if(static_cast<size_t>(v) >= var_to_nid.size())
-      var_to_nid.resize(v+1, NONE);
+  for (auto v : cluster) {
+    if (static_cast<size_t>(v) >= var_to_nid.size())
+      var_to_nid.resize(v + 1, NONE);
     var_to_nid[v] = nid;
   }
   nodes.push_back({nid, cluster});
@@ -90,21 +90,41 @@ void Graph::insert_into_edge_list(vector<Edge>& edges, const Edge& edge) {
     edges.insert(it, edge);
 }
 
+void Graph::combine_nodes(const vector<vector<Var>>& vars_to_comb) {
+  bool nodes_to_rebuild = false;
+  for (auto& n : nodes) n.cid = n.nid;
+  for (const auto& vars : vars_to_comb) {
+    if (vars.size() <= 1) continue;
+    if (std::any_of(vars.begin(), vars.end(), [&](Var v) {
+          return v >= static_cast<int>(var_to_nid.size()) ||
+                 var_to_nid[v] == NONE;
+        }))
+      continue;
+    for (Var v : vars)
+      nodes[var_to_nid[v]].cid = nodes[var_to_nid[vars[0]]].cid;
+    nodes_to_rebuild = true;
+  }
+  if (nodes_to_rebuild) rebuild_nodes();
+}
+
 double Graph::extractCommunities(vector<vector<Var>>& communities) {
   vector<int> nodesToProcess;
   double modularity_increase{0};
   communities.clear();
+  components.clear();
   if (new_cross_node_edges) {
-    if (params.verbosity > 0)
-      cout << "c extractCommunities #nodes =" << nodes.size() << "\n";
+    log(2, "c Abstraction: extractCommunities #nodes =", nodes.size());
     // 1. Assign each node to its own component
     for (auto& n : nodes) {
       n.cid = components.size();
-      components.push_back({n.internal_edge_wt, n.total_edge_wt, {n.nid}});
-      if (n.can_be_clustered()) nodesToProcess.push_back(n.nid);
-      // else
-      // cout << "Can't cluster " << n.nid << " not enough edges\n";
-      n.on_ToProcess = true;
+      components.push_back({n.internal_edge_wt,
+                            n.total_edge_wt,
+                            {n.nid},
+                            static_cast<int>(n.cnf_vars.size())});
+      if (n.can_be_clustered()) {
+        nodesToProcess.push_back(n.nid);
+        n.on_ToProcess = true;
+      }
     }
     // Louvain greedy modularity improvement
     while (!nodesToProcess.empty()) {
@@ -113,20 +133,17 @@ double Graph::extractCommunities(vector<vector<Var>>& communities) {
       nodes[nid].on_ToProcess = false;
       modularity_increase += louvain_find_components(nid, nodesToProcess);
     }
-    if (params.verbosity > 1)
-      cout << "c total mod increase = " << modularity_increase << "\n";
+    log(2, "c total mod increase = ", modularity_increase);
 
     if (modularity_increase <= 0)
       new_cross_node_edges = false;
     else
       rebuild_nodes();
   } else {
-    if (params.verbosity > 1)
-      cout << "c Skipping Louvain as no new cross node edges added since last "
-              "call\n";
+    log(2,
+        "c Skipping Louvain as no new cross node edges added since last call");
   }
   for (auto& n : nodes) communities.push_back(n.cnf_vars);
-
   for (auto& n : nodes)
     if (!n.can_be_clustered() && n.is_clustered())
       cout << "ERROR node: " << n << "\n"
@@ -138,7 +155,6 @@ double Graph::louvain_find_components(int nid, vector<int>& nodesToProcess) {
   vector<Weight> comp_wts(components.size(), 0.0);
   // cout << "louvain processing " << nid << "\n";
   auto& nd = nodes[nid];
-  for (auto& i : comp_wts) i = 0.0;
   for (auto& e : nd.edges) {
     auto& connected_node = nodes[e.nid];
     if (connected_node.can_be_clustered()) comp_wts[connected_node.cid] += e.wt;
@@ -155,11 +171,12 @@ double Graph::louvain_find_components(int nid, vector<int>& nodesToProcess) {
   for (int cid = 0; static_cast<size_t>(cid) != components.size(); ++cid) {
     if (comp_wts[cid] == 0.0 || cid == nd.cid) continue;
     double mod_delta =
-        2 * ((comp_wts[cid] - comp_wts[nd.cid]) / m +
-             nd.total_edge_wt *
-                 (components[nd.cid].total_edge_wt -
-                  components[cid].total_edge_wt - nd.total_edge_wt) /
-                 sq(m));
+        m ? 2 * ((comp_wts[cid] - comp_wts[nd.cid]) / m +
+                 nd.total_edge_wt *
+                     (components[nd.cid].total_edge_wt -
+                      components[cid].total_edge_wt - nd.total_edge_wt) /
+                     sq(m))
+          : 0;
     if (mod_delta > best_mod_delta) {
       best_mod_delta = mod_delta;
       best_cid = cid;
@@ -175,6 +192,7 @@ double Graph::louvain_find_components(int nid, vector<int>& nodesToProcess) {
   if (best_mod_delta > 0) {
     // move nd to new component
     assert(best_cid != nd.cid);
+    if (components[nd.cid].n_vars + components[best_cid].n_vars > 750) return 0;
     auto old_cid = nd.cid;
     move_node(nd, best_cid, comp_wts);
     nids_to_reprocess(nodesToProcess, old_cid, best_cid, nd.nid);
@@ -190,6 +208,7 @@ void Graph::move_node(Node& nd, int to_cid, const vector<Weight>& comp_wts) {
   auto it = std::lower_bound(nid_list.begin(), nid_list.end(), nd.nid);
   assert(it != nid_list.end());
   nid_list.erase(it);
+  cur_comp.n_vars -= nd.cnf_vars.size();
 
   auto& new_comp{components[to_cid]};
   new_comp.total_edge_wt += nd.total_edge_wt;
@@ -197,7 +216,7 @@ void Graph::move_node(Node& nd, int to_cid, const vector<Weight>& comp_wts) {
   auto& new_nid_list{new_comp.nids};
   it = std::lower_bound(new_nid_list.begin(), new_nid_list.end(), nd.nid);
   new_nid_list.insert(it, nd.nid);
-
+  new_comp.n_vars += nd.cnf_vars.size();
   nd.cid = to_cid;
 }
 
@@ -216,7 +235,7 @@ void Graph::nids_to_reprocess(vector<int>& nids, int old_cid, int new_cid,
 }
 
 void Graph::rebuild_nodes() {
-  vector<int> remap(components.size(), NONE);
+  vector<int> remap(nodes.size(), NONE);
   int nxt{0};
   for (auto& n : nodes)
     if (remap[n.cid] == NONE) {
@@ -231,6 +250,10 @@ void Graph::rebuild_nodes() {
       new_nd.cnf_vars.push_back(v);
       var_to_nid[v] = new_nd.nid;
     }
+    // THIS BUG CORRECTION MIGHT CHANGE CLUSTERING !
+    new_nd.internal_edge_wt += nd.internal_edge_wt;
+    new_nd.total_edge_wt += nd.internal_edge_wt;
+
     for (auto e : nd.edges) {
       e.nid = remap[nodes[e.nid].cid];
       new_nd.total_edge_wt += e.wt;

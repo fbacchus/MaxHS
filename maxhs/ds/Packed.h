@@ -25,7 +25,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PACKED_VEC_H
 
 #include <algorithm>
-#include <ostream>
+#include <iostream>
 #include <utility>
 #include <vector>
 

@@ -31,13 +31,15 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #ifdef GLUCOSE
 #include "glucose/core/SolverTypes.h"
+#include "glucose/mtl/Heap.h"
 #else
 #include "minisat/core/SolverTypes.h"
+#include "minisat/mtl/Heap.h"
 #endif
 
 #include "maxhs/core/MaxSolverTypes.h"
 #include "maxhs/ds/Packed.h"
-#include "maxhs/ifaces/miniSatSolver.h"
+#include "maxhs/ifaces/SatSolver.h"
 
 using std::cout;
 
@@ -51,6 +53,7 @@ using Minisat::lbool;
 using Minisat::Lit;
 using Minisat::toInt;
 using Minisat::var;
+using Minisat::Heap;
 
 /* Store a weighted CNF formula */
 enum class MStype { undef, ms, pms, wms, wpms };
@@ -89,7 +92,7 @@ class SC_mx {
   bool _is_core;
 };
 
-inline ostream& operator<<(ostream& os, const SC_mx& mx) {
+inline std::ostream& operator<<(std::ostream& os, const SC_mx& mx) {
   os << (mx.is_core() ? "Core Mx: " : "Non-Core-Mx: ")
      << "Defining Lit = " << mx.encoding_lit()
      << " blits = " << mx.soft_clause_lits();
@@ -183,7 +186,7 @@ class Wcnf {
   size_t nHards() const { return hard_cls.size(); }
   size_t nSofts() const { return soft_cls.size(); }
   // including extra variables added via transformations
-  int nVars() const { return maxvar + 1; }
+  size_t nVars() const { return maxvar + 1; }
 
   Var maxVar() const {
     return maxvar;
@@ -207,6 +210,19 @@ class Wcnf {
   int n_mxes() const { return mutexes.size(); }
   const SC_mx& get_ith_mx(int i) const { return mutexes[i]; }
   int ith_mx_size(int i) const { return mutexes[i].soft_clause_lits().size(); }
+
+  //get input file literal
+  Lit input_lit(Lit l) const {
+    if(static_cast<size_t>(var(l)) >= in2ex.size() || in2ex[var(l)] == Minisat::var_Undef)
+      return Minisat::lit_Undef;
+    return Minisat::mkLit(in2ex[var(l)], sign(l));
+  }
+
+  vector<Lit> vec_to_file_lits(const vector<Lit>& v) {
+    vector<Lit> fv;
+    for(auto l : v) fv.push_back(input_lit(l));
+    return fv;
+  }
 
  private:
   bool inputDimacs(std::string filename, bool verify);
@@ -268,7 +284,7 @@ class Wcnf {
   bool noDups{true};
   bool intWts{true};
   bool orig_all_lits_soft{false};
-  int ndiffWts;
+  int ndiffWts{};
   vector<char> orig_unit_soft;
   vector<Weight> transitionWts;  // weights w s.t. sum of soft clauses with
                                  // weight less that w is less than w
@@ -276,13 +292,14 @@ class Wcnf {
   Packed_vecs<Lit> soft_cls;
   vector<Weight> soft_clswts;
   // store preprocessing computation for remaping.
+  int nOrigUnits{};
   vector<Lit> hard_units;       // in external ordering
   vector<vector<Lit>> all_scc;  // in external ordering
   vector<char> flipped_vars;    // convert unit softs to contain positive lit.
                                 // must remove dups first
   vector<Var> ex2in, in2ex;
   Lit map_in2ex(Lit l) const {
-    assert(var(l) < in2ex.size() && in2ex[var(l)] != var_Undef);
+    assert(static_cast<size_t>(var(l)) < in2ex.size() && in2ex[var(l)] != Minisat::var_Undef);
     return Minisat::mkLit(in2ex[var(l)], sign(l));
   }
 

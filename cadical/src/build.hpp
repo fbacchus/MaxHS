@@ -1,0 +1,5 @@
+#define VERSION "1.3.1"
+#define IDENTIFIER "c622a490ec3d9a1a1e998b08120c9b8d0b67a123"
+#define COMPILER "g++ (Homebrew GCC 10.2.0_2) 10.2.0"
+#define FLAGS "-Wall -Wextra -O3 -DNDEBUG"
+#define DATE "Wed Jan 20 15:48:40 EST 2021 Darwin FahiemiMac-2.local 19.6.0 x86_64"

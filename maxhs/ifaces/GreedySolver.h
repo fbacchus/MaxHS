@@ -37,13 +37,13 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "maxhs/core/Bvars.h"
 #include "maxhs/core/MaxSolverTypes.h"
-#include "maxhs/core/TotalizerManager.h"
+#include "maxhs/core/SumManager.h"
 #include "maxhs/core/Wcnf.h"
 
 namespace MaxHS_Iface {
 class GreedySolver {
  public:
-  GreedySolver(Bvars& b, TotalizerManager* t);
+  GreedySolver(Bvars& b, SumManager* s);
   // external interface is in terms of b-literals
   bool addClause(const vector<Lit>& lts);  // should be core
   bool addMutexConstraint(const SC_mx& mx);
@@ -64,7 +64,7 @@ class GreedySolver {
 
  protected:
   Bvars& bvars;
-  TotalizerManager* totalizers;
+  SumManager* summations;
 
   void ensureSC(int);
   void ensureCore(int);
@@ -108,7 +108,7 @@ class GreedySolver {
   };
   ClsOrderLt heap_lt;
   Heap<int, ClsOrderLt> sftcls_heap;
-  Heap<int, ClsOrderLt> tins_heap;
+  Heap<int, ClsOrderLt> s_ins_heap;
   void add_sc_to_soln(int soft_clause_index);
 
   // Mutex processing
@@ -119,7 +119,7 @@ class GreedySolver {
   vector<char> core_mx_in_solution;
   lbool blit_curval(Lit b);
   void solution_update_ncore_mxes();
-  void solution_update_totalizers();
+  void solution_update_summations();
 
   // stats
   int solves;

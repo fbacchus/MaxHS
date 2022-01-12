@@ -44,47 +44,56 @@ using Minisat::var;
 // satisfied). In Fb, the b-lit true does not force the clause to be
 // falsified...but for units it does even when Fb is used.
 
-enum class Var_type : uint8_t {
-  not_in_theory = 0,
-  original = 1,
-  bvar = 2,
-  core_is_pos = 4,
-  in_mutex = 8,
-  orig_core_is_pos = 16,
-  dvar = 32,
-  totalizer = 64
+struct Var_type {
+  uint8_t original : 1;
+  uint8_t bvar : 1;
+  uint8_t core_is_pos : 1;
+  uint8_t in_mutex : 1;
+  uint8_t orig_core_is_pos : 1;
+  uint8_t dvar : 1;
+  uint8_t summation : 1;
+  uint8_t cntrl : 1;
+  Var_type()
+      : original{false},
+        bvar{false},
+        core_is_pos{false},
+        in_mutex{false},
+        orig_core_is_pos{false},
+        dvar{false},
+        summation{false},
+        cntrl{false} {}
 };
 
-constexpr Var_type operator|(const Var_type x, const Var_type y) {
-  return static_cast<Var_type>(static_cast<uint8_t>(x) |
-                               static_cast<uint8_t>(y));
-}
-
-constexpr Var_type& operator|=(Var_type& x, const Var_type y) { x = x | y; return x; }
-
-constexpr Var_type operator&(const Var_type x, const Var_type y) {
-  return static_cast<Var_type>(static_cast<uint8_t>(x) &
-                               static_cast<uint8_t>(y));
-}
-constexpr bool to_bool(const Var_type x) { return x != Var_type::not_in_theory; }
-
-ostream& operator<<(ostream& os, const Var_type& x);
+std::ostream& operator<<(std::ostream& os, const Var_type& x);
 
 class Bvars {
   // Helper class to manage mapping of b-variables to soft clauses.
  public:
   Bvars(const Wcnf* f);
   ~Bvars() {}
- 
+
   // number and sizes
-  size_t n_bvars() const { return theWcnf->nSofts(); }
-  size_t n_blits() const { return n_bvars() * 2; }
-  size_t n_ovars() const { return theWcnf->nVars(); }
-  Var maxBvar() const { return maxbvar; }
-  Var maxvar() const {
-    return std::max(maxTvar, std::max(theWcnf->maxVar(), maxbvar));
+  size_t n_bvars() const { return nBvars; }
+  size_t n_blits() const { return nBvars * 2; }
+  size_t n_ovars() const { return nOvars; }
+  size_t n_vars() const { return var_types.size(); }
+
+  // make new variables
+  Var newBVar() {
+    auto v = make_newVar();
+    var_types[v].bvar = true;
+    return v;
   }
-  size_t n_vars() const { return maxvar() + 1; }
+  Var newCtrlVar() {
+    auto v = make_newVar();
+    var_types[v].cntrl = true;
+    return v;
+  }
+  Var newSummationVar() {
+    auto v = make_newVar();
+    var_types[v].summation = true;
+    return v;
+  }
 
   // blit of soft clause
   Var varOfCls(int i) const { return var(litOfCls(i)); }
@@ -108,14 +117,12 @@ class Bvars {
   Lit nonCoreLit(Var v) const { return ~coreLit(v); }
 
   // Variable is a bvar
-  bool isBvar(Var v) const { return to_bool(var_types[v] & Var_type::bvar); }
+  bool isBvar(Var v) const { return var_types[v].bvar; }
   bool isBvar(Lit l) const { return isBvar(var(l)); }
 
   // return true if bvar appears positively/negatively in soft clause.
   // I.e., setting to true/false incurs cost of sone soft clause.
-  bool coreIsPos(Var v) const {
-    return isBvar(v) && to_bool(var_types[v] & Var_type::core_is_pos);
-  }
+  bool coreIsPos(Var v) const { return isBvar(v) && var_types[v].core_is_pos; }
   bool coreIsPos(Lit l) const { return coreIsPos(var(l)); }
   bool coreIsNeg(Var v) const { return isBvar(v) && !coreIsPos(v); }
   bool coreIsNeg(Lit l) const { return coreIsNeg(var(l)); }
@@ -129,22 +136,18 @@ class Bvars {
   bool isNonCore(Lit l) const { return isCore(~l); }
 
   // is original variable (could also be a bvar!)
-  bool isOvar(Var v) const {
-    return to_bool(var_types[v] & Var_type::original);
-  }
+  bool isOvar(Var v) const { return var_types[v].original; }
   bool isOvar(Lit l) const { return isOvar(var(l)); }
 
   // appears in mutex
-  bool inMutex(Var v) const {
-    return to_bool(var_types[v] & Var_type::in_mutex);
-  }
+  bool inMutex(Var v) const { return var_types[v].in_mutex; }
   bool inMutex(Lit l) const { return inMutex(var(l)); }
 
   // var appears in a mutex and making it postive/negative incurred the cost of
   // that original soft clause (i.e., before these softs were encoded into a
   // mutex)
   bool orig_coreIsPos(Var v) const {
-    return inMutex(v) && to_bool(var_types[v] & Var_type::orig_core_is_pos);
+    return inMutex(v) && var_types[v].orig_core_is_pos;
   }
   bool orig_coreIsPos(Lit l) const { return orig_coreIsPos(var(l)); }
   bool orig_coreIsNeg(Var v) const { return inMutex(v) && !orig_coreIsPos(v); }
@@ -174,16 +177,11 @@ class Bvars {
   }
   bool inNonCoreMx(Lit l) const { return inNonCoreMx(var(l)); }
 
-  bool isDvar(Var v) const { return to_bool(var_types[v] & Var_type::dvar); }
+  bool isDvar(Var v) const { return var_types[v].dvar; }
   bool isDvar(Lit l) const { return isDvar(var(l)); }
 
-  /*bool isTvar(Var v) const {
-    return to_bool(var_types[v] & Var_type::totalizer);
-  }
-  bool isTvar(Lit l) const { return isTvar(var(l)); }
-
-  void setOutput(Lit tOutput, Lit next);
-  Lit nextOutput(Lit tOutput);*/
+  bool isCntrl(Var v) const { return var_types[v].cntrl; }
+  bool isCntrl(Lit l) const { return var_types[var(l)].cntrl; }
 
   // Map bvar or blit to a 0 based index---allowing
   // storing vector based data about bvars/blits
@@ -249,24 +247,19 @@ class Bvars {
   void printVars();
   void print_var_types();
 
-  void initMaxTvar() { maxTvar = maxvar(); }
-
-  Var makeTvar() {
-    var_types.push_back(Var_type::totalizer);
-    return ++maxTvar;
-  }
-
  private:
+  Var make_newVar() {
+    var_types.push_back({});
+    return var_types.size() - 1;
+  }
   const Wcnf* theWcnf;
-  Var maxbvar{};
-  Var maxTvar{};
+  size_t nBvars{}, nOvars{};
+
   vector<Lit> clsBlit;  // map from clause index to blit of clause
-  vector<int>
-      bvarCls;  // map from b-var to clause index (sign determined by clsBlit)
+  // map from b-var to clause index (sign determined by clsBlit)
+  vector<int> bvarCls;
   vector<Var_type> var_types;
   vector<int> mxNum;  // map from variables to mutex they are in
-
-  vector<Lit> nextOutputM;  // map for the next outputLit
 };
 
 #endif

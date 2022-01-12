@@ -51,14 +51,14 @@ namespace Minisat = Glucose;
 
 using namespace Minisat;
 
-GreedySolver::GreedySolver(Bvars& b, TotalizerManager* t)
+GreedySolver::GreedySolver(Bvars& b, SumManager* s)
     : bvars(b),
-      totalizers(t),
+      summations(s),
       nSatCores{0},
       dyn_nSatCores{0},
       heap_lt{bvars, dyn_satCount},
       sftcls_heap{heap_lt},
-      tins_heap{heap_lt},
+      s_ins_heap{heap_lt},
       n_core_mxes{0},
       solves{0},
       totalTime{0},
@@ -275,7 +275,7 @@ vector<Lit> GreedySolver::solve_() {
   core_mx_in_solution.resize(n_core_mxes, false);
 
   solution_update_ncore_mxes();
-  //solution_update_totalizers();
+  //solution_update_summations();
 
   sftcls_heap.clear();
   for (size_t i = 0; i < dyn_satCount.size(); i++)
@@ -462,36 +462,36 @@ void GreedySolver::solution_update_ncore_mxes() {
   }
 }
 
-void GreedySolver::solution_update_totalizers() {
-  // Process true totalizer outputs
-  // For each toplevel totalizer get is input blits.
+void GreedySolver::solution_update_summations() {
+  // Process true summation outputs
+  // For each toplevel summation get is input blits.
   // count true outputs and #true inputs known to greedy solver
   // If k is the difference then select k inputs of the
-  // totalizer and add them to the solution.
-  vector<int> tots{totalizers->get_top_level_tidxes()};
-  int forced_tins{0};
+  // sum and add them to the solution.
+  vector<int> sums{summations->get_top_level_sidxes()};
+  int forced_sins{0};
 
-  for (auto tidx : tots) {
-    int out_true = totalizers->get_n_true_outs(tidx);
-    vector<Lit> tins{totalizers->get_ilits_from_tidx(tidx)};
+  for (auto sidx : sums) {
+    int out_true = summations->get_n_true_outs(sidx);
+    vector<Lit> s_ins{summations->get_ilits_from_sidx(sidx)};
     int in_true = 0;
-    for (auto b : tins)
+    for (auto b : s_ins)
       if (blit_curval(b) == l_True) ++in_true;
     if (in_true >= out_true) continue;
 
-    tins_heap.clear();
-    for (auto b : tins)
-      if (blit_curval(b) == l_Undef) tins_heap.insert(bvars.clsIndex(b));
+    s_ins_heap.clear();
+    for (auto b : s_ins)
+      if (blit_curval(b) == l_Undef) s_ins_heap.insert(bvars.clsIndex(b));
 
-    while (!tins_heap.empty() && in_true < out_true) {
-      auto clsi = tins_heap.removeMin();
-      add_sc_to_soln(clsi), ++forced_tins;
+    while (!s_ins_heap.empty() && in_true < out_true) {
+      auto clsi = s_ins_heap.removeMin();
+      add_sc_to_soln(clsi), ++forced_sins;
       ++in_true;
     }
   }
 
-  if (forced_tins && params.verbosity > 0)
-    cout << "c added " << forced_tins << " forced tins to greedy soln\n";
+  if (forced_sins && params.verbosity > 0)
+    cout << "c added " << forced_sins << " forced summation inputs to greedy soln\n";
 }
 
 void GreedySolver::printDS() {

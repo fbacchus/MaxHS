@@ -40,7 +40,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "maxhs/core/Bvars.h"
 #include "maxhs/core/Dimacs.h"
 #include "maxhs/core/Wcnf.h"
-#include "maxhs/ifaces/miniSatSolver.h"
+#include "maxhs/ifaces/cadicalSatSolver.h"
 #include "maxhs/utils/Params.h"
 #include "maxhs/utils/hash.h"
 #include "maxhs/utils/io.h"
@@ -49,7 +49,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 namespace Minisat = Glucose;
 #endif
 
-using MaxHS_Iface::miniSolver;
+using MaxHS_Iface::cadicalSolver;
 using MaxHS_Iface::SatSolver_uniqp;
 using Minisat::lbool;
 using Minisat::mkLit;
@@ -122,6 +122,7 @@ void Wcnf::update_maxorigvar(vector<Lit>& lits) {
 
 void Wcnf::addHardClause(vector<Lit>& lits) {
   update_maxorigvar(lits);
+  if (lits.size() == 1) ++nOrigUnits;
   _addHardClause(lits);
 }
 
@@ -211,7 +212,6 @@ void Wcnf::simplify() {
     // write simplified wcnf to cout then exit.
     printDimacs(cout);
   }
-  if (params.prepro_output) printFormula();
 }
 
 bool Wcnf::test_all_lits_are_softs() {
@@ -252,14 +252,13 @@ void Wcnf::subEqsAndUnits() {
   // 1. Find current units in the hard clauses and then find/binaries
   // among the hard clauses reduced by those units.
 
-  SatSolver_uniqp sat_solver{new MaxHS_Iface::miniSolver};
-  sat_solver->eliminate(true);  // no preprocessing
-  for (size_t i = 0; i < nHards(); i++)
-    if (!sat_solver->addClause(getHard(i))) {
-      unsat = true;
-      return;
-    }
-
+  SatSolver_uniqp sat_solver{new cadicalSolver};
+  for (size_t i = 0; i < nHards(); i++) sat_solver->addClause(getHard(i));
+  if (sat_solver->theory_is_unsat()) {
+    unsat = true;
+    return;
+  }
+  sat_solver->unit_propagate();
   hard_units = sat_solver->getForced(0);
 
   if (params.wcnf_eqs) {
@@ -304,7 +303,7 @@ void Wcnf::subEqsAndUnits() {
   for (auto cls : soft_cls)
     for (auto l : cls) appears[var(l)] |= sign(l) ? 0b01 : 0b10;
 
-  for (int v = 0; v != nVars(); v++)
+  for (size_t v = 0; v != nVars(); v++)
     if (appears[v] == 0b01) {  // pure -v
       ++pures;
       // debug
@@ -321,12 +320,15 @@ void Wcnf::subEqsAndUnits() {
     if (params.verbosity > 0)
       cout << "c WCNF eqs: found additional units after scc "
            << hard_units.size() - n_hards << " pures " << pures << "\n";
-    for (auto l : hard_units)
-      if (!sat_solver->addClause(l)) {
-        unsat = true;
-        return;
-      }
+
+    for (auto l : hard_units) sat_solver->addClause(l);
+    if (sat_solver->theory_is_unsat()) {
+      unsat = true;
+      return;
+    }
+    sat_solver->unit_propagate();
     hard_units = sat_solver->getForced(0);
+
     // debug
     // cout << "New hard units = " << hard_units << "\n";
 
@@ -359,13 +361,12 @@ void Wcnf::subEqsAndUnits() {
 vector<Lit> Wcnf::get_units() {
   // feed hard clauses of wcnf into a sat solver, do unit prop, and then
   // return the found units
-  SatSolver_uniqp sat_solver{new miniSolver};
-  sat_solver->eliminate(true);  // no preprocessing
-  for (size_t i = 0; i < nHards(); i++)
-    if (!sat_solver->addClause(getHard(i))) {
-      unsat = true;
-      return {};
-    }
+  SatSolver_uniqp sat_solver{new cadicalSolver};
+  for (size_t i = 0; i < nHards(); i++) sat_solver->addClause(getHard(i));
+  if (sat_solver->theory_is_unsat()) {
+    unsat = true;
+    return {};
+  }
   return sat_solver->getForced(0);
 }
 
@@ -374,20 +375,17 @@ vector<Lit> Wcnf::get_binaries(SatSolver_uniqp& sat_solver) {
   for (auto& clause : hard_cls) {
     int nlits = 0;
     for (auto l : clause) {
-      auto truth_value = sat_solver->curVal(l);
+      auto truth_value = sat_solver->fixedValue(l);
       if (truth_value == l_Undef) nlits++;
-
       if (truth_value == l_True)
         // treat satisfied clauses as if they are too big.
         nlits = 3;
-
       if (nlits > 2) break;
     }
-
     if (nlits == 2) {
       int sz{};
       for (auto l : clause)
-        if (sat_solver->curVal(l) == l_Undef) {
+        if (sat_solver->fixedValue(l) == l_Undef) {
           binaries.push_back(l);
           sz++;
         }
@@ -395,7 +393,7 @@ vector<Lit> Wcnf::get_binaries(SatSolver_uniqp& sat_solver) {
         cout << "c ERROR in WCNF get_binaries...binary of size " << sz
              << "\n [";
         for (auto l : clause) {
-          sat_solver->printLit(l);
+          cout << l << ":" << sat_solver->fixedValue(l);
           cout << ", ";
         }
         cout << "]\n";
@@ -412,7 +410,7 @@ Packed_vecs<Lit> Wcnf::reduce_by_eqs_and_units(const Packed_vecs<Lit>& clauses,
   vector<lbool> truth_vals(2 * nVars(), l_Undef);
   vector<Lit> eqLit(2 * nVars());
 
-  for (int i = 0; i < nVars(); i++) {
+  for (size_t i = 0; i < nVars(); i++) {
     auto lt = mkLit(i);
     eqLit[toInt(lt)] = lt;
     eqLit[toInt(~lt)] = ~lt;
@@ -740,20 +738,16 @@ void Wcnf::simpleHarden() {
 
   if (unsat) return;
   computeWtInfo();
-
   // cout << "BEFORE HARDENING\n";
   // printFormula();
 
-  SatSolver_uniqp sat_solver{new miniSolver};
-  sat_solver->eliminate(
-      true);  // no preprocessing due to incremental use of solver
-
-  for (size_t i = 0; i < nHards(); i++)
-    if (!sat_solver->addClause(getHard(i))) {
-      unsat = true;
-      if (params.verbosity > 0) cout << "c WCNF hardened 0 soft clauses\n";
-      return;
-    }
+  SatSolver_uniqp sat_solver{new cadicalSolver};
+  for (size_t i = 0; i < nHards(); i++) sat_solver->addClause(getHard(i));
+  if (sat_solver->theory_is_unsat()) {
+    unsat = true;
+    if (params.verbosity > 0) cout << "c WCNF found hards are unsat\n";
+    return;
+  }
 
   // Debug
   /*cout << "Diffwts = [";
@@ -777,16 +771,17 @@ void Wcnf::simpleHarden() {
     for (size_t c = 0; c < nSofts(); c++) {
       if (soft_clswts[c] >= transitionWts[i] && soft_clswts[c] < maxWt) {
         n++;
-        if (!sat_solver->addClause(getSoft(c))) break;
+        sat_solver->addClause(getSoft(c));
+        if (sat_solver->theory_is_unsat()) break;
       }
     }
 
     // DEBUG
     // cout << "Added " << n << " soft clauses to sat solver\n";
 
-    if (!sat_solver->status()) break;
+    if (sat_solver->theory_is_unsat()) break;
     maxWt = transitionWts[i];
-    auto canHarden = sat_solver->solvePropBudget(5 * 1024 * 1024);
+    auto canHarden = sat_solver->solvePropBudget(1024 * 1024);
     // DEBUG
     // cout << "sat solver returns " << canHarden << "\n";
 
@@ -827,7 +822,8 @@ void Wcnf::simpleHarden() {
 
   if (params.verbosity > 0)
     cout << "c WCNF hardened " << nHardened
-         << " soft clauses. New total_cls wt = " << total_cls_wt << "\n";
+         << " soft clauses. New total_cls wt = " << wt_fmt(total_cls_wt)
+         << "\n";
 
   // cout << "AFTER HARDENING\n";
   // printFormula();
@@ -871,7 +867,6 @@ void Wcnf::processMxs(vector<vector<Lit>> mxs, Bvars& bvars) {
 
   vector<char> delMarks(nSofts(), 0);
   auto orig_nsofts = nSofts();
-  Var newVar = nVars();
   vector<Lit> blits{};
   for (auto& mx : mxs) {
     // debug
@@ -895,9 +890,16 @@ void Wcnf::processMxs(vector<vector<Lit>> mxs, Bvars& bvars) {
     auto dvar = var_Undef;
     auto dlit = lit_Undef;
     blits.clear();
-    // we transform mx-non-cores into one single new soft clause we
-    // keep all of soft clauses of an mx-core but define a new variable
-    // that is true iff one of the mx-core soft clauses if falsified.
+    // if the mx is a core-mx it means that of a set of soft clauses
+    // at most one can be false. One could define a new variable d
+    // that is true if one of these soft clauses if false, and then a
+    // unit clause (-d) asking the solver to satisfy all of the soft
+    // clauses.  However, having the solver assume -d leads to weaker
+    // conflicts than having it assume (-b1, -b2, ..., -bk) (where
+    // these are the soft clauses in the mutex. So we do not do the
+    // transformation, but we do obtain a bvar for each soft and tell
+    // the solver that these bvars are mutex (this info can be added
+    // to the hitting set solvers.
     if (core) {
       for (auto l : mx) {
         auto ci = bvars.clsIndex(l);
@@ -909,7 +911,7 @@ void Wcnf::processMxs(vector<vector<Lit>> mxs, Bvars& bvars) {
         } else if (sftcls.size() == 1)
           blits.push_back(~sftcls[0]);
         else {
-          auto blit = mkLit(newVar++);
+          auto blit = mkLit(bvars.newBVar());
           blits.push_back(blit);
           sftcls.push_back(blit);
           delMarks[ci] = 1;
@@ -918,7 +920,7 @@ void Wcnf::processMxs(vector<vector<Lit>> mxs, Bvars& bvars) {
         }
       }
       mutexes.emplace_back(blits, core, lit_Undef);
-      // dvar = newVar++;
+      // dvar = bvars.newBvar();
       // dlit = mkLit(dvar);
       // for (auto l : mx) {
       //   auto ci = bvars.clsIndex(l);
@@ -934,6 +936,21 @@ void Wcnf::processMxs(vector<vector<Lit>> mxs, Bvars& bvars) {
       // }
       // _addSoftClause(~dlit, unitWt);
     } else {
+      // If the mutex is a non-core then there is a set of soft clauses at most
+      // one of which can be TRUE. So we can add the wt of all but one to base
+      // cost. In additon the transformation to a single new soft clause
+      // (-d) where -d == one is TRUE, (d == all are false) is beneficial. As
+      // the solver assuming -d corresponds to assuming a disjunction (-b1 \/
+      // -b2 \/ ... \/ -bk) (where the bi are the softs in the mutex. Assuming
+      // this disjunction leads to more powerful clauses than picking an
+      // arbitrary -bi to make true (i.e., an arbitrary soft clause to make
+      // true).
+      //
+      // We encode d as -d -> the disjunction of all literals in these
+      // soft clauses. But TODO we should also check the approach of  Bacchus
+      // and Katesirelos CAV 2015 of introducing a b-var for each soft
+      // clause and then have -d -> the disjunction of these bvars
+
       for (auto l : mx) {
         auto ci = bvars.clsIndex(l);
         auto sftcls = getSoft(ci);
@@ -945,7 +962,7 @@ void Wcnf::processMxs(vector<vector<Lit>> mxs, Bvars& bvars) {
         for (auto x : sftcls) blits.push_back(x);  // union of softs
         delMarks[ci] = 1;
       }
-      dvar = newVar++;
+      dvar = bvars.newBVar();
       dlit = mkLit(dvar);
       blits.push_back(dlit);
       _addHardClause(blits);
@@ -997,29 +1014,28 @@ class MXFinder {
   // helper class for finding mutually exclusive bvars
  public:
   MXFinder(Wcnf* f, Bvars& b)
-      : nImpCalls{0},
-        bvars{b},
+      : bvars{b},
         theWcnf{f},
-        blitMarks(2 * (bvars.maxvar() + 1), 0),
-        totalMxMem{0} {}
+        sat_solver{new cadicalSolver},
+        blitMarks(2 * bvars.n_vars(), 0) {}
   ~MXFinder() {
     for (auto p : blitMXes)
       if (p) delete p;
   }
   bool findMxs(vector<vector<Lit>>&);
-  int nImpCalls;
+  int nImpCalls{0};
 
  private:
-  miniSolver solver;
   Bvars bvars;
   Wcnf* theWcnf;
+  SatSolver_uniqp sat_solver;
   vector<uint8_t> blitMarks;
   const uint8_t inmx{1};
   const uint8_t in2s{2};
   bool fbeq();
   size_t getMXLitSize(Lit);
   const vector<Lit>* getMXLits(Lit);
-  uint64_t totalMxMem;
+  uint64_t totalMxMem{};
   vector<vector<Lit>*> blitMXes;
   void getMXRecomputeSizes(const vector<Lit>&);
   vector<Lit> growMx(Lit start);
@@ -1106,7 +1122,7 @@ bool MXFinder::findMxs(vector<vector<Lit>>& mxs) {
           static_cast<uint64_t>(1024 * 1024) * params.mx_mem_limit)
         cout << "c WCNF mx finder hit its memory limit. "
              << "Potentially more mxes could be found with -mx-mem-lim made "
-                "largeer\n";
+                "larger\n";
       if ((Minisat::cpuTime() - start_time) > params.mx_cpu_lim)
         cout << "c WCNF mx finder hit its time limit. "
              << "Potentially more mxes could be found with -mx-cpu-lim made "
@@ -1223,13 +1239,14 @@ bool MXFinder::findMxs(vector<vector<Lit>>& mxs) {
         }
       }
       cout << "c WCNF mutexes: #cores mutexes = " << cores;
-      if (cores) cout << " ave. size = " << core_total_size / cores;
+      if (cores) cout << " ave. size = " << fix4_fmt(core_total_size / cores);
       cout << "\n";
       cout << "c WCNF mutexes: #non-cores mutexes = " << ncores;
-      if (ncores) cout << " ave. size = " << ncore_total_size / ncores;
+      if (ncores)
+        cout << " ave. size = " << fix4_fmt(ncore_total_size / ncores);
       cout << "\n";
-      cout << "c WCNF mutexes: time used = " << Minisat::cpuTime() - start_time
-           << "\n";
+      cout << "c WCNF mutexes: time used = "
+           << time_fmt(Minisat::cpuTime() - start_time) << "\n";
     }
   }
   return true;
@@ -1350,39 +1367,27 @@ vector<Lit> MXFinder::growMx(Lit start) {
 
 bool MXFinder::fbeq() {
   // Add fbeq to solver.
-  if (!params.mx_sat_preprocess) solver.eliminate(true);  // no preprocessing
-
   for (size_t i = 0; i < theWcnf->nHards(); i++)
-    if (!solver.addClause(theWcnf->getHard(i))) return false;
+    sat_solver->addClause(theWcnf->getHard(i));
+  if (sat_solver->theory_is_unsat()) return false;
 
   for (size_t i = 0; i < theWcnf->nSofts(); i++) {
     Lit blit = bvars.litOfCls(i);
     if (theWcnf->softSize(i) > 1) {
       vector<Lit> sftCls{theWcnf->getSoft(i)};
       sftCls.push_back(blit);
-      if (!solver.addClause(sftCls)) return false;
+      sat_solver->addClause(sftCls);
+      if (sat_solver->theory_is_unsat()) return false;
 
       vector<Lit> eqcls(2, lit_Undef);
       eqcls[1] = ~blit;
       for (auto l : theWcnf->softs()[i]) {
         eqcls[0] = ~l;
-        if (!solver.addClause(eqcls)) return false;
+        sat_solver->addClause(eqcls);
+        if (sat_solver->theory_is_unsat()) return false;
       }
     }
   }
-
-  if (params.mx_sat_preprocess) {
-    for (size_t i = 0; i < theWcnf->nSofts(); i++) {
-      Var v{bvars.varOfCls(i)};
-      if (solver.activeVar(v)) solver.freezeVar(v);
-    }
-    double start{cpuTime()};
-    solver.eliminate(true);
-    if (params.verbosity > 0)
-      cout << "c WCNF minisat preprocess eliminated " << solver.nEliminated()
-           << " variables. Took " << cpuTime() - start << "sec.\n";
-  }
-
   return true;
 }
 
@@ -1399,13 +1404,13 @@ const vector<Lit>* MXFinder::getMXLits(Lit l) {
 
   Weight lWT{0};  // rather than set up a class of template, we capture this
                   // local var in our lambda.
-  auto coreMX = [this, &lWT](Lit l1) {
-    return blitMarks[toInt(l1)] != inmx && bvars.isNonCore(l1) &&
-           bvars.wt(var(l1)) == lWT;
+  auto not_coreMX = [this, &lWT](Lit l1) {
+    return blitMarks[toInt(l1)] == inmx || !bvars.isNonCore(l1) ||
+           bvars.wt(var(l1)) != lWT;
   };
-  auto nonCoreMX = [this, &lWT](Lit l1) {
-    return blitMarks[toInt(l1)] != inmx && bvars.isCore(l1) &&
-           bvars.wt(var(l1)) == lWT;
+  auto not_nonCoreMX = [this, &lWT](Lit l1) {
+    return blitMarks[toInt(l1)] == inmx || !bvars.isCore(l1) ||
+           bvars.wt(var(l1)) != lWT;
   };
 
   if (blitMXes.size() <= static_cast<size_t>(toInt(l)))
@@ -1423,17 +1428,21 @@ const vector<Lit>* MXFinder::getMXLits(Lit l) {
 
     lWT = bvars.wt(var(l));
     ++nImpCalls;
+    sat_solver->findImplications(l, imps);
+
     if (bvars.isCore(l))
-      solver.findImplicationsIf(l, imps, coreMX);
+      imps.erase(std::remove_if(imps.begin(), imps.end(), not_coreMX),
+                 imps.end());
     else
-      solver.findImplicationsIf(l, imps, nonCoreMX);
+      imps.erase(std::remove_if(imps.begin(), imps.end(), not_nonCoreMX),
+                 imps.end());
 
     // debug
     /*vector<Lit> t;
       t.push_back(l);
       vector<Lit> o;
       vector<Lit> pruned;
-      solver.findImplications(t, o);
+      sat_solver->findImplications(t, o);
       t.clear();
       for(size_t i=0; i < o.size(); ++i) {
       if(blitMarks[toInt(o[i])] != inmx &&
@@ -1555,7 +1564,7 @@ void Wcnf::remapVars() {
   Var nxtvar{0};
   ex2in.resize(nVars(), var_Undef);
   in2ex.resize(nVars(), var_Undef);
-  for (Var v = 0; v != nVars(); v++)
+  for (Var v = 0; v != static_cast<Var>(nVars()); v++)
     if (appears[v]) {
       in2ex[nxtvar] = v;
       ex2in[v] = nxtvar;
@@ -1715,7 +1724,7 @@ void Wcnf::computeWtInfo() {
       diffWtCounts.push_back(1);
     }
 
-  double wtSoFar = diffWts[0] * diffWtCounts[0];
+  Weight wtSoFar = diffWts[0] * diffWtCounts[0];
   for (size_t i = 1; i < diffWts.size(); i++) {
     if (diffWts[i] > wtSoFar) transitionWts.push_back(diffWts[i]);
     wtSoFar += diffWts[i] * diffWtCounts[i];
@@ -1737,37 +1746,49 @@ void Wcnf::computeWtInfo() {
 }
 
 void Wcnf::printFormulaStats() {
+  // hard_units if not empty will include original units.
+  // if empty it will not
   auto n_units = hard_units.size();
+  if (!n_units) n_units = nOrigUnits;
   cout << "c Instance: " << instance_file_name << "\n";
   cout << "c Dimacs Vars: " << dimacs_nvars << "\n";
   cout << "c Dimacs Clauses: " << dimacs_nclauses << "\n";
+  cout << "c Dimacs Top: " << wt_fmt(dimacs_top) << '\n';
   cout << "c HARD: #Clauses = " << hard_cls.size() + n_units
        << ", Total Lits = " << hard_cls.total_size() + n_units << ", Ave Len = "
-       << ((hard_cls.size() + n_units > 0)
-               ? (1.0 * hard_cls.total_size() + n_units) /
-                     (hard_cls.size() + n_units)
-               : 0.0)
+       << fix4_fmt((hard_cls.size() + n_units > 0)
+                       ? (1.0 * hard_cls.total_size() + n_units) /
+                             (hard_cls.size() + n_units)
+                       : 0.0)
        << " #units = " << n_units << "\n";
   cout << "c SOFT: #Clauses = " << soft_cls.size()
-       << ", Total Lits = " << soft_cls.total_size()
-       << ", Ave Len = " << (1.0 * soft_cls.total_size()) / soft_cls.size()
+       << ", Total Lits = " << soft_cls.total_size() << ", Ave Len = "
+       << fix4_fmt(soft_cls.size()
+                       ? static_cast<double>(soft_cls.total_size()) /
+                             soft_cls.size()
+                       : 0)
        << "\n";
-  cout << "c Total Soft Clause Weight (+ basecost): " << totalClsWt() << " (+ "
-       << baseCost() << "), Dimacs Top = " << dimacs_top << "\n";
+  cout << "c Total Soft Clause Weight (+ basecost): " << wt_fmt(totalClsWt())
+       << " (+ " << wt_fmt(baseCost()) << ")\n";
   cout << "c SOFT%: "
-       << (100.0 * soft_cls.size()) /
-              (soft_cls.size() + hard_cls.size() + n_units)
+       << fix4_fmt(soft_cls.size() + hard_cls.size() + n_units
+                       ? (100.0 * soft_cls.size()) /
+                             (soft_cls.size() + hard_cls.size() + n_units)
+                       : 0)
        << "%\n";
-  cout << "c #distinct weights: " << nDiffWts() << ", mean = " << aveSftWt()
-       << ", std. dev = " << std::sqrt(varSftWt()) << ", min = " << minSftWt()
-       << ", max = " << maxSftWt() << "\n";
+  cout << "c #distinct weights: " << nDiffWts()
+       << ", mean = " << fix4_fmt(aveSftWt())
+       << ", std. dev = " << fix4_fmt(std::sqrt(varSftWt()))
+       << ", min = " << wt_fmt(minSftWt()) << ", max = " << wt_fmt(maxSftWt())
+       << "\n";
   cout << "c Total Clauses: " << hard_cls.size() + n_units + soft_cls.size()
        << "\n";
   cout << "c Parse time: " << parsing_time << "\n";
   cout << "c Wcnf Space Required: "
-       << ((hard_cls.total_size() + soft_cls.total_size()) * sizeof(Lit) +
-           soft_clswts.size() * sizeof(Weight)) /
-              (1024 * 1024)
+       << fix4_fmt(
+              ((hard_cls.total_size() + soft_cls.total_size()) * sizeof(Lit) +
+               soft_clswts.size() * sizeof(Weight)) /
+              (1024 * 1024))
        << "MB\n";
   if (unsat) cout << "c Wcnf is UNSAT (hards are contradictory)\n";
   cout << "c ================================"
@@ -1778,24 +1799,27 @@ void Wcnf::printSimpStats() {
   cout << "c After WCNF Simplification\n";
   cout << "c HARD: #Clauses = " << hard_cls.size()
        << ", Total Lits = " << hard_cls.total_size() << ", Ave Len = "
-       << ((hard_cls.size() > 0)
-               ? (1.0 * hard_cls.total_size()) / hard_cls.size()
-               : 0.0)
+       << fix4_fmt((hard_cls.size() > 0)
+                       ? (1.0 * hard_cls.total_size()) / hard_cls.size()
+                       : 0.0)
        << "\n";
   cout << "c SOFT: #Clauses = " << soft_cls.size()
-       << ", Total Lits = " << soft_cls.total_size()
-       << ", Ave Len = " << (1.0 * soft_cls.total_size()) / soft_cls.size()
+       << ", Total Lits = " << soft_cls.total_size() << ", Ave Len = "
+       << fix4_fmt((1.0 * soft_cls.total_size()) / soft_cls.size()) << "\n";
+  cout << "c Total Soft Clause Weight (+ basecost): " << wt_fmt(totalClsWt())
+       << " (+ " << wt_fmt(baseCost())
+       << "), Dimacs Top = " << wt_fmt(dimacs_top) << "\n";
+  cout << "c #distinct weights: " << nDiffWts()
+       << ", mean = " << fix4_fmt(aveSftWt())
+       << ", std. dev = " << fix4_fmt(std::sqrt(varSftWt()))
+       << ", min = " << wt_fmt(minSftWt()) << ", max = " << wt_fmt(maxSftWt())
        << "\n";
-  cout << "c Total Soft Clause Weight (+ basecost): " << totalClsWt() << " (+ "
-       << baseCost() << "), Dimacs Top = " << dimacs_top << "\n";
-  cout << "c #distinct weights: " << nDiffWts() << ", mean = " << aveSftWt()
-       << ", std. dev = " << std::sqrt(varSftWt()) << ", min = " << minSftWt()
-       << ", max = " << maxSftWt() << "\n";
   cout << "c Total Clauses: " << hard_cls.size() + soft_cls.size() << "\n";
   cout << "c Wcnf Space Required: "
-       << ((hard_cls.total_size() + soft_cls.total_size()) * sizeof(Lit) +
-           soft_clswts.size() * sizeof(Weight)) /
-              1000000.0
+       << fix4_fmt(
+              ((hard_cls.total_size() + soft_cls.total_size()) * sizeof(Lit) +
+               soft_clswts.size() * sizeof(Weight)) /
+              1000000.0)
        << "MB\n";
   if (unsat) cout << "c Wcnf is UNSAT (hards are contradictory)\n";
   cout << "c ================================"
@@ -1811,7 +1835,7 @@ void Wcnf::printFormula(std::ostream& out) const {
   if (unsat) out << " formula is UNSAT\n";
   out << "c Hard Clauses # = " << hard_cls.size() + hard_units.size() << "\n";
   out << "c Soft Clauses, # = " << soft_cls.size() << "\n";
-  out << "c Base cost = " << base_cost << "\n";
+  out << "c Base cost = " << wt_fmt(base_cost) << "\n";
   out << "c HARD Units\n";
   out << hard_units << "\n";
   out << "c HARD SCCs\n";
@@ -1821,7 +1845,7 @@ void Wcnf::printFormula(std::ostream& out) const {
 
   out << "c SOFTS\n";
   for (size_t i = 0; i < soft_cls.size(); i++) {
-    out << soft_clswts[i] << " ";
+    out << wt_fmt(soft_clswts[i]) << " ";
     for (auto& item : soft_cls[i]) out << item << " ";
     out << "0 \n";
   }
@@ -1831,9 +1855,9 @@ void Wcnf::printFormula(Bvars& bvars, std::ostream& out) const {
   // TODO modify to optionally output new DIMACS file.
   out << "c Wcnf---Print Formula\n";
   out << "c Dimacs (Vars, Clauses, TOP) = (" << dimacs_nvars << " ,"
-      << dimacs_nclauses << " ," << dimacs_top << ")";
+      << dimacs_nclauses << " ," << wt_fmt(dimacs_top) << ")";
   out << " maxvar = " << nVars() << "\n";
-  out << "c totalClsWt = " << totalClsWt() << "\n";
+  out << "c totalClsWt = " << wt_fmt(totalClsWt()) << "\n";
   if (unsat) out << " formula is UNSAT\n";
   out << "c Hard Clauses # = " << hard_cls.size() << "\n";
   out << "c Hard Units # = " << hard_units.size() << "\n";
@@ -1856,15 +1880,12 @@ void Wcnf::printFormula(Bvars& bvars, std::ostream& out) const {
   int ns{0};
   for (size_t i = 0; i < nSofts(); i++)
     out << "c#" << ns++ << " blit = " << bvars.litOfCls(i)
-        << " wt = " << getWt(i) << " : " << getSoft(i) << "\n";
+        << " wt = " << wt_fmt(getWt(i)) << " : " << getSoft(i) << "\n";
 }
 
 void Wcnf::printDimacs(std::ostream& out) const {
   // Broken---fix or remove on next update
   return;
-  auto flags = out.flags();
-  out << std::fixed << std::setprecision(0);
-
   out << "c maxhs-simplify max original var: " << maxOrigVar() + 1 << "\n";
   out << "c maxhs-simplify original file name: " << instance_file_name << "\n";
   if (unsat) {
@@ -1894,24 +1915,24 @@ void Wcnf::printDimacs(std::ostream& out) const {
       out << "p wcnf " << nvars << " " << ncls << "\n";
       break;
     case MStype::pms:
-      out << "p wcnf " << nvars << " " << ncls << " " << top << "\n";
+      out << "p wcnf " << nvars << " " << ncls << " " << wt_fmt(top) << "\n";
       break;
     case MStype::wpms:
-      out << "p wcnf " << nVars() << " " << ncls << " " << top << "\n";
+      out << "p wcnf " << nVars() << " " << ncls << " " << wt_fmt(top) << "\n";
       break;
     case MStype::undef:
       out << "c ERROR problem finding out mstype\n";
-      out << "p wcnf " << nVars() << " " << ncls << " " << top << "\n";
+      out << "p wcnf " << nVars() << " " << ncls << " " << wt_fmt(top) << "\n";
   }
 
   if (baseCost() > 0) {
     // Above we ensured that nvars >= 1. Use 1 to encode the base costs.
-    out << baseCost() << " " << 1 << " 0\n";
-    out << baseCost() << " " << -1 << " 0\n";
+    out << wt_fmt(baseCost()) << " " << 1 << " 0\n";
+    out << wt_fmt(baseCost()) << " " << -1 << " 0\n";
   }
 
   for (size_t i = 0; i < nSofts(); i++) {
-    if (mstype() != MStype::ms) out << soft_clswts[i] << " ";
+    if (mstype() != MStype::ms) out << wt_fmt(soft_clswts[i]) << " ";
     for (auto l : soft_cls[i]) out << map_in2ex(l) << " ";
     out << "0\n";
   }
@@ -1925,5 +1946,4 @@ void Wcnf::printDimacs(std::ostream& out) const {
     for (auto l : hard_cls[i]) out << map_in2ex(l) << " ";
     out << "0\n";
   }
-  out.flags(flags);
 }

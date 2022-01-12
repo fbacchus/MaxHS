@@ -35,6 +35,7 @@ class Params {
   void readOptions();
   int verbosity;
   int mverbosity;
+  int sverbosity;
   const double noLimit;
   int min_type;
   double mus_cpu_lim;
@@ -60,12 +61,14 @@ class Params {
   bool seed_learnts;
   int seed_all_limit;
   double seed_all_cpu;
-  bool bvarDecisions;
   double frac_to_relax;
   int frac_rampup_start;
   int frac_rampup_end;
   int max_cores_before_cplex;
   int max_cpu_before_cplex;
+  double all_seeded_first_cplex_cpu;
+  double all_seeded_first_abs_cpu;
+  double all_seeded_2nd_abs_cpu;
 //  int max_cplex_calls_before_opt;
   bool lp_harden;
 
@@ -95,7 +98,6 @@ class Params {
   // double trypop_feedtime_lb;
   int trypop;
   int conflicts_from_ub;
-  bool prepro_output;
   bool preprocess;
   bool wcnf_eqs;
   bool wcnf_harden;
@@ -117,11 +119,11 @@ class Params {
   int abstract_min_cores;
   int abstract_assumps;
   double cpu_per_exhaust;
-  double cpu_per_exhaust_all_clauses;
   double abstract_gap;
+  double initial_abstract_gap;
+  double abs_cpu;
 
   bool mx_constrain_hs;
-  bool mx_sat_preprocess;
   double mx_cpu_lim;
   std::string instance_file_name;
 };

@@ -46,8 +46,8 @@ namespace Minisat = Glucose;
 #endif
 
 template <class B>
-static double parseIntegerDouble(B& in) {
-  double val = 0;
+static long double parseIntegerLongDouble(B& in) {
+  long double val = 0;
   bool neg = false;
   skipWhitespace(in);
   if (*in == '-')
@@ -62,8 +62,8 @@ static double parseIntegerDouble(B& in) {
 
 // JD
 template <class B>
-static double parseDouble(B& in) {
-  double val = 0;
+static long double parseLongDouble(B& in) {
+  long double val = 0;
   bool neg = false;
   bool frac = false;
   int exponent = 0;
@@ -122,7 +122,7 @@ static void readClause(B& in, vector<Lit>& lits, Weight& outW) {
   for (;;) {
     if (first_time) {
       first_time = false;
-      outW = (Weight)parseDouble(in);
+      outW = parseLongDouble(in);
       continue;
     }
     parsed_lit = parseInt(in);
@@ -157,7 +157,7 @@ static bool parse_DIMACS_main(B& in, Wcnf* F) {
         int nvars = parseInt(in);
         clauses = parseInt(in);
         if (!eagerMatch(in, "\n")) {
-          Weight top = parseIntegerDouble(in);
+          Weight top = parseIntegerLongDouble(in);
           F->set_dimacs_params(nvars, clauses, top);
         } else {  // no top => no hard clauses => no upper bound on soft clause
                   // weight.

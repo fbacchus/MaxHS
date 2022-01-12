@@ -32,7 +32,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "maxhs/ifaces/SatSolver.h"
 
 class Bvars;
-class TotalizerManager;
+class SumManager;
 
 namespace MaxHS_Iface {
 class Cplex;
@@ -44,7 +44,7 @@ using std::vector;
 class Assumps {
   // MaxSolver helper class
  public:
-  Assumps(MaxHS_Iface::SatSolver* s, Bvars& b, TotalizerManager* t);
+  Assumps(MaxHS_Iface::SatSolver* s, Bvars& b, SumManager* t);
   // initialize assumptions to make all softs true, or set of passed softs
   void init(vector<Minisat::Lit> lits);
   void all_softs_true();
@@ -67,10 +67,10 @@ class Assumps {
  private:
   MaxHS_Iface::SatSolver* satsolver;
   Bvars& bvars;
-  TotalizerManager* totalizers;
+  SumManager* summations;
   vector<Minisat::Lit> assumps;
   vector<int> map;
-  vector<int> tot_index;
+  vector<int> sum_index;
   vector<int> counts;
   vector<int> coeff;
   void flip(const vector<Minisat::Lit>& conflict);

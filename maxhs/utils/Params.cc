@@ -54,9 +54,12 @@ static IntOption opt_verb(maxhs, "verb",
                           "Verbosity level (0=silent, 1=some, 2=more, "
                           "3=debugging output, 4=more debugging output).",
                           1, IntRange(0, 5));
-static BoolOption opt_bvardecisions(maxhs, "bvardecisions",
-                                    "FB: make bvars decision variables.",
-                                    false);
+static IntOption opt_sverb(
+    maxhs, "sverb",
+    "Sat solver verbosity level (0=silent, 1=some, 2=more,3=debugging output, "
+    "4=more debugging output).",
+    0, IntRange(0, 4));
+
 static BoolOption opt_fbeq(maxhs, "fbeq",
                            "FB: Use FbEq theory. Independent of \"coretype\"",
                            false);
@@ -121,11 +124,11 @@ static IntOption opt_abstract_greedy_cores(
 static IntOption opt_cplexgreedy(
     abstract, "cplex-greedy",
     "JB: do greedy solving with cplex. (0=not at all, 1=always, 2=only after "
-    "adding totalizers)",
+    "adding summations)",
     0, IntRange(0, 2));
 static IntOption opt_abstract_min_size(
     abstract, "abstract-minsize",
-    "JB: minimum-size of totalizer before adding them", 2,
+    "JB: minimum-size of summation before adding them", 2,
     IntRange(1, std::numeric_limits<int>::max()));
 static IntOption opt_abstract_max_core_size(
     abstract, "abstract-max_core_size",
@@ -136,20 +139,26 @@ static IntOption opt_abstract_min_cores(
     "Only allow softs to be clustered into abstractions when they appear in "
     "this minimum number of cores",
     2, IntRange(0, std::numeric_limits<int>::max()));
+
+static DoubleOption opt_abs_cpu(
+    abstract, "abs-cpu", "CPU limit for abstraction round", 256.0,
+    DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
+
 static DoubleOption opt_cpu_per_exhaust(
     abstract, "exhaust-cpu-lim",
-    "JB: CPU time limit for exhausting totalizers (-1 == no limit).", 60.0,
-    DoubleRange(-1.0, true, std::numeric_limits<Weight>::max(), true));
-static DoubleOption opt_cpu_per_exhaust_all_clauses(
-    abstract, "exhaust-cpu-lim-all-clauses",
-    "JB: CPU time limit for exhausting totalizers (-1 == no limit) when all "
-    "clauses seeded.",
-    15.0, DoubleRange(-1.0, true, std::numeric_limits<Weight>::max(), true));
+    "JB: CPU time limit for exhausting summations (-1 == no limit).", 3.0,
+    DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
 static DoubleOption opt_abstract_gap(
     abstract, "abstract-gap",
-    "If CPLEX does not improve the gap between UB and LB by this amount we try "
-    "abstracting",
-    5.0, DoubleRange(0.0, true, std::numeric_limits<Weight>::max(), true));
+    "If the lp-relaxation does not improve by this we consider doing "
+    "abstraction ",
+    1.0, DoubleRange(0.0, true, std::numeric_limits<double>::max(), true));
+
+static DoubleOption opt_initial_abstract_gap(
+    abstract, "1st-abstract-gap",
+    "If seeding and initial disjoint does not improve the lp-relaxation gap by "
+    "this amount we consider doing abstraction",
+    5.0, DoubleRange(0.0, true, std::numeric_limits<double>::max(), true));
 
 // Disjoint Phase Controls
 static BoolOption opt_dsjnt(disjoint, "dsjnt",
@@ -158,12 +167,12 @@ static BoolOption opt_dsjnt(disjoint, "dsjnt",
 static DoubleOption opt_dsjnt_cpu_per_core(
     disjoint, "dsjnt-cpu-lim",
     "FB: CPU time limit for finding each disjoint cores (-1 == no limit).",
-    30.0, DoubleRange(-1.0, true, std::numeric_limits<Weight>::max(), true));
+    30.0, DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
 
 static DoubleOption opt_dsjnt_mus_cpu_lim(
     disjoint, "dsjnt-mus-cpu-lim",
     "FB: CPU time limit for minimizing each *disjoint* core (-1 == no limit).",
-    10.0, DoubleRange(-1.0, true, std::numeric_limits<Weight>::max(), true));
+    10.0, DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
 
 // Noncore and Seeding Options
 static BoolOption opt_seed_learnts(
@@ -187,14 +196,30 @@ static IntOption opt_maxseeds(seed, "seed-max",
 
 static IntOption opt_seed_all_limit(
     seed, "seed-all-limit",
-    "If the total number of variables is <= this limit then seed all clauses "
-    "CPLEX (subject to \"seed-max\" limit...CPLEX will do most of the solving "
-    "but SAT might assist in finding feasible solutions",
+    "If the total number of variables is <= this limit and the total number of "
+    "clauses <= 64* this limit) then seed all clauses into "
+    "CPLEX (subject to \"seed-max\" limit...CPLEX will try to solve "
+    "but SAT might also be used",
     256 * 2, IntRange(0, std::numeric_limits<int>::max()));
 
 static DoubleOption opt_seed_all_cpu_before_cplex(
     seed, "seed_cpu_before_cplex",
     "CPU time limit before calling cplex when all clauses seeded", 200.0,
+    DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
+
+static DoubleOption opt_all_seeded_first_cplex_cpu(
+    seed, "all-seeded-1st-cplex-cpu",
+    "CPU limit for first cplex solve when all clauses seeded", 100.0,
+    DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
+
+static DoubleOption opt_all_seeded_first_abs_cpu(
+    seed, "all-seeded-1st-abs-cpu",
+    "CPU limit first abstraction when all clauses seeded", 60.0,
+    DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
+
+static DoubleOption opt_all_seeded_2nd_abs_cpu(
+    seed, "all-seeded_2nd_abs_cpu",
+    "CPU limit second abstraction when all clauses seeded", 240.0,
     DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
 
 // Populate and Soln Pool
@@ -216,6 +241,7 @@ static IntOption opt_trypop(pop, "cplex-populate",
                             "Use cplex populate to obtain more solutions "
                             "(0=never) (1=when potentially useful) (2=always)",
                             1, IntRange(0, 2));
+
 static IntOption opt_conflicts_from_ub(
     pop, "ub-conflicts",
     "FB: Generate conflicts from upper bound (0=neve) (1=when potentially "
@@ -226,7 +252,7 @@ static IntOption opt_conflicts_from_ub(
 static DoubleOption opt_optcores_cpu_per(
     seqOfSat, "optcores-cpu-lim",
     "FB: CPU time limit for finding each additional core (-1 == no limit).", 10,
-    DoubleRange(-1.0, true, std::numeric_limits<Weight>::max(), true));
+    DoubleRange(-1.0, true, std::numeric_limits<double>::max(), true));
 
 static IntOption opt_nonopt(
     seqOfSat, "nonopt",
@@ -238,9 +264,9 @@ static IntOption opt_nonopt(
 
 static IntOption opt_abstract_assumps(
     seqOfSat, "abstract-assumps",
-    "Method for relaxing abstract assumptions (0 = remove totalizers outputs "
-    "like ordinary b-vars, 1 = relax totalizer to be next output, 2 = relax "
-    "only one totalizer output at a time",
+    "Method for relaxing abstract assumptions (0 = remove summation outputs "
+    "like ordinary b-vars, 1 = relax summations to be next output, 2 = relax "
+    "only one summation output at a time",
     1, IntRange(0, 2));
 
 static DoubleOption opt_relaxfrac(
@@ -364,10 +390,6 @@ static BoolOption opt_prepro_mx_constrain_hs(
     "mutexes",
     true);  // true
 
-static BoolOption opt_prepro_mx_sat_preprocess(
-    pre, "mx-sat-prepro", "Use minisat preprocessor before detecting mx softs",
-    false);
-
 static DoubleOption opt_prepro_mx_max_cpu(
     pre, "mx-cpu-lim", "Max time to spend on mx detection (-1 == no limit)",
     15.0, DoubleRange(-1, true, std::numeric_limits<double>::max(), true));
@@ -380,14 +402,12 @@ static BoolOption opt_cplex_write_model(
     debug, "cplex-wrt-model", "Make cplex write out each of its models", false);
 static BoolOption opt_cplex_output(debug, "cplex-output",
                                    "Turn on cplex output", false);
-static BoolOption opt_prepro_output(debug, "dump-prepro",
-                                    "Output the preprocessed formula", false);
 
 Params::Params() : noLimit{-1.0} {}
 
 void Params::readOptions() {
   verbosity = opt_verb;
-  prepro_output = opt_prepro_output;
+  sverbosity = opt_sverb;
   mverbosity = muser_verb;
 
   printOptions = opt_printOptions;
@@ -433,7 +453,6 @@ void Params::readOptions() {
 
   sort_assumps = opt_sort_assumps;
   bestmodel_mipstart = opt_b_m_s;
-  bvarDecisions = opt_bvardecisions;
   fbeq = opt_fbeq;
   fb = !fbeq;
 
@@ -493,14 +512,12 @@ void Params::readOptions() {
   wcnf_eqs = opt_prepro_wcnf_eqs;
   wcnf_harden = opt_prepro_wcnf_harden;
   wcnf_units = opt_prepro_wcnf_units;
- 
+
   simplify_and_exit = opt_prepro_simplify_and_exit;
   mx_find_mxes = opt_prepro_mx_find_mxes;
   mx_mem_limit = opt_prepro_mx_mem_lim;
   mx_seed_originals = opt_prepro_mx_seed_originals;
   mx_constrain_hs = opt_prepro_mx_constrain_hs;
-  mx_sat_preprocess = opt_prepro_mx_sat_preprocess;
-
   mx_cpu_lim = (opt_prepro_mx_max_cpu > 0) ? opt_prepro_mx_max_cpu : noLimit;
 
   abstract = opt_abstract;
@@ -512,9 +529,13 @@ void Params::readOptions() {
   abstract_min_size = opt_abstract_min_size;
   abstract_max_core_size = opt_abstract_max_core_size;
   abstract_min_cores = opt_abstract_min_cores;
+  all_seeded_first_cplex_cpu = opt_all_seeded_first_cplex_cpu;
+  all_seeded_first_abs_cpu = opt_all_seeded_first_abs_cpu;
+  all_seeded_2nd_abs_cpu = opt_all_seeded_2nd_abs_cpu;
   cpu_per_exhaust = opt_cpu_per_exhaust;
-  cpu_per_exhaust_all_clauses = opt_cpu_per_exhaust_all_clauses;
   abstract_gap = opt_abstract_gap;
+  initial_abstract_gap = opt_initial_abstract_gap;
+  abs_cpu = opt_abs_cpu;
 }
 
 Params params;

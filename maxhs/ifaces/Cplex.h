@@ -39,7 +39,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "maxhs/core/Bvars.h"
 #include "maxhs/core/MaxSolverTypes.h"
-#include "maxhs/core/TotalizerManager.h"
+#include "maxhs/core/SumManager.h"
 #include "maxhs/core/Wcnf.h"
 
 #ifdef GLUCOSE
@@ -47,11 +47,12 @@ namespace Minisat = Glucose;
 #endif
 
 using std::vector;
+using Minisat::var_Undef;
 
 namespace MaxHS_Iface {
 class Cplex {
  public:
-  Cplex(Bvars& b, TotalizerManager* t, vector<lbool>& ubModelSofts,
+  Cplex(Bvars& b, SumManager* s, vector<lbool>& ubModelSofts,
         vector<lbool>& ubModel, bool integerWts);
   ~Cplex();
 
@@ -121,7 +122,7 @@ class Cplex {
 
  protected:
   Bvars& bvars;
-  TotalizerManager* totalizers;
+  SumManager* summations;
 
   vector<lbool>& ubModelSofts;
   vector<lbool>& ubModel;
@@ -135,10 +136,10 @@ class Cplex {
   double LB{};
   double absGap;
 
-  void add_tot_unit(Lit tout);
-  void add_tot_output_defn(Lit lt);
-  void add_tot_output_constraint(Lit lt);
-  // bool add_tot_atmost(Lit lt);
+  void add_sum_unit(Lit tout);
+  void add_sum_output_defn(Lit lt);
+  void add_sum_output_constraint(Lit lt);
+  // bool add_sum_atmost(Lit lt);
 
   // forced units (in external ordering)
   vector<lbool> exUnits;
@@ -186,9 +187,9 @@ class Cplex {
   // So this array function is safe...i.e., won't add var_Undef to output
   // vector. An array version of ex2in is typically not safe in this way.
   // so is not provided.
-  void in2ex(const vec<int>& from, vector<Var>& to) const {
+  void in2ex(const vector<int>& from, vector<Var>& to) const {
     to.clear();
-    for (int i = 0; i < from.size(); i++) to.push_back(in2ex(from[i]));
+    for (size_t i = 0; i < from.size(); i++) to.push_back(in2ex(from[i]));
   }
 
   int ex2in(Var v) const {

@@ -25,7 +25,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef MaxSolverTypes_h
 #define MaxSolverTypes_h
 
-typedef double Weight;
+typedef long double Weight;
 
 enum class CoreType { cores, nonCores, mixed };
 enum class CoreRelaxFn { rand, maxoccur, frac, dsjn };

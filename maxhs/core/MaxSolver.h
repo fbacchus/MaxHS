@@ -25,6 +25,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef MaxSolver_h
 #define MaxSolver_h
 
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -42,7 +43,7 @@ using std::vector;
 
 class Wcnf;
 class Assumps;
-class TotalizerManager;
+class SumManager;
 
 namespace MaxHS_Iface {
 class Cplex;
@@ -75,6 +76,7 @@ class MaxSolver {
   void updateLB(Weight wt) {
     if (wt > lower_bnd) lower_bnd = wt;
   }
+  bool check_termination();
 
  protected:
   Wcnf* theWcnf;
@@ -83,11 +85,8 @@ class MaxSolver {
   MaxHS_Iface::GreedySolver* greedysolver{};
   MaxHS_Iface::Muser* muser{};
   MaxHS_Iface::Cplex* cplex{};
-  TotalizerManager* totalizers{};
+  SumManager* summations{};
   int top_freq{};
-
-  // PREPROCESSING
-  bool doPreprocessing();  // test if preprocessing should be skipped.
 
   // BOUNDS
   Weight sat_wt{};  // wt of soft clauses known to be satisfiable.
@@ -115,13 +114,10 @@ class MaxSolver {
   // SAT solver interaction
   //  set up bvars
   void configBvar(Var, MaxHS_Iface::SatSolver*);
-  void setNoBvarDecisions();
 
   // add clauses to sat solver
   void addHards(MaxHS_Iface::SatSolver*);
-  void addHards(MaxHS_Iface::SatSolver*, const vector<int>& indicies);
   void addSofts(MaxHS_Iface::SatSolver*);
-  void addSofts(MaxHS_Iface::SatSolver*, const vector<int>&);
 
   // b-var equivalent clauses for Fbeq (potentially removable).
   // removable b-vars implemented by adding extra control variable to all eq
@@ -131,12 +127,12 @@ class MaxSolver {
   void addSoftEqs(MaxHS_Iface::SatSolver*, bool removable);
   void addSoftEqs(MaxHS_Iface::SatSolver*, bool removable,
                   const vector<int>& indicies);
-  Var eqCvar;     // control variable for b-var equivalences.
-  Lit eqCvarPos;  // Postive literal of eqCvar
+  Var eqCvar{};  // control variable for b-var equivalences.
+  Lit eqCvarPos{Minisat::lit_Undef};  // Postive literal of eqCvar
   void rmSoftEqs(MaxHS_Iface::SatSolver* slv) {
     // assert eqCvar and thus remove all eq clauses after
-    // a call to simplify
-    slv->freeVar(mkLit(eqCvar, false));
+    // a call to simplify. Can't add eq clauses again
+    if (eqCvarPos != Minisat::lit_Undef) slv->addClause(eqCvarPos);
   }
   Lit activateSoftEqLit() {
     // return assumption that activates the soft equivalent clauses
@@ -170,20 +166,21 @@ class MaxSolver {
   // Transfer units between sub-solvers.
   int greedyAddNewForcedBvars();
   int cplexAddNewForcedBvars();
-  void satSolverAddNewForcedVars();
-  void muserAddNewForcedVars();
+
   struct GetNewUnits {
-    int not_seen;
+    int not_seen{0};
     vector<Lit> forced;
-    template <typename S>
-    void update(S* slv) {
+    void update(MaxHS_Iface::SatSolver* slv) {
       forced = slv->getForced(not_seen);
       not_seen += forced.size();
     }
-    GetNewUnits() : not_seen{0}, forced{} {}
+    vector<Lit>& new_units(MaxHS_Iface::SatSolver* slv) {
+      update(slv);
+      return forced;
+    }
   };
-  GetNewUnits cplexNU{}, greedyNU{}, muserNU{}, satNU{}, satBvarNU{},
-      forcedWtNU{};
+
+  GetNewUnits greedyNU, satBvarNU, cplexNU;
 
   // Statistics
   int amountConflictMin{};
@@ -200,6 +197,9 @@ class MaxSolver {
   void outputConflict(const vector<Lit>& conf);
   void optFound(const std::string& reason);
   void unsatFound();
+  void checkModel(const std::string& location);
+  void printNclausesInSatSolver(const std::string& msg);
+
   bool printStatsExecuted{false};
 
   // status flags
@@ -221,7 +221,6 @@ class MaxSolver {
   bool tryHarden_with_lp_soln(const Weight lp_objval,
                               vector<double>& lp_redvals,
                               vector<Var>& cplex_vars);
-
   int n_softs_forced_hard_not_in_cplex{};
   int n_softs_forced_hard{};
   int n_softs_forced_false{};
@@ -231,49 +230,16 @@ class MaxSolver {
   int n_touts_forced_true{};
   int n_touts_forced_false{};
 
-  void tryPopulate(vector<Lit>&, double);
   bool get_cplex_conflicts(const vector<Lit>&, char type, double timeout,
                            int max_cores);
   bool get_greedy_conflicts(double timeout, int max_cores);
-  void get_ub_conflicts();
+  bool get_populate_conflicts(double timeout, int max_cores, double gap);
+  bool get_ub_conflicts(double timeout);
   int get_seq_of_conflicts(const vector<Lit>&, double first_core_cpu_lim,
                            double other_core_cpu_lim, double timeout,
                            int max_cores);
   bool assumps_are_blocked(const vector<Lit>&);
 
-  // For forced by bounding or failed lit tests
-  vector<Weight> impWt;     // holds the implied weight of a literal
-  vector<lbool> impWtType;  // holds the type of weight stored in impliedWt
-  int nFailedLits{};
-  int nForcedByBounds{};
-
-  void findForced();
-  bool findImpWt(Lit);
-  const lbool impWtUnk{l_Undef}, impWtExact{l_True}, impWtUB{l_False};
-  bool impWtIsUnk(Lit l) {
-    return toInt(l) >= static_cast<int>(impWt.size()) ||
-           impWtType[toInt(l)] == impWtUnk;
-  }
-  bool impWtIsExact(Lit l) {
-    return toInt(l) < static_cast<int>(impWt.size()) &&
-           impWtType[toInt(l)] == impWtExact;
-  }
-  bool impWtIsUB(Lit l) {
-    return toInt(l) < static_cast<int>(impWt.size()) &&
-           impWtType[toInt(l)] == impWtUB;
-  }
-  void setImpWt(Lit l, Weight w, const lbool type) {
-    if (static_cast<size_t>(toInt(l)) >= impWt.size()) {
-      impWt.resize(toInt(l) + 1);
-      impWtType.resize(toInt(l) + 1, impWtUnk);
-    }
-    impWt[toInt(l)] = w;
-    impWtType[toInt(l)] = type;
-  }
-  Weight getImpWt(Lit l) {
-    assert((size_t)toInt(l) < impWt.size());
-    return static_cast<size_t>(toInt(l)) >= impWt.size() ? 0 : impWt[toInt(l)];
-  }
   // mutexes
   void processMutexes();
   const uint8_t inMxdvar = 2;
@@ -306,6 +272,7 @@ class MaxSolver {
   double mtime{};
   int mcalls{};
   bool doMin{true};
+  bool blit_true_warning{true};
 
   void check_mus(vector<Lit>& con);  // debugging
 
@@ -331,7 +298,20 @@ class MaxSolver {
 
   BLitOrderLt blit_lt;
   BLitOrderLt blit_gt;
-};
+
+  // data for tracking triggers for abstraction.
+  struct AbsTracking{
+    vector<Weight> deltas{};
+    vector<Weight> gaps{};
+    vector<int> n_constraints{};
+    vector<bool> did_abstraction{};
+  };
+
+  AbsTracking track_abs_triggers{};
+  bool do_abstraction() const;
+  bool iteration_is_bad(Weight desired_delta, Weight delta, Weight gap) const;
+
+};  // namespace MaxHS
 
 }  // namespace MaxHS
 

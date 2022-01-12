@@ -40,16 +40,15 @@
 #ifndef IFACESAT_H
 #define IFACESAT_H
 
+#include <algorithm>
 #include <iostream>
-#include <vector>
 #include <memory>
+#include <vector>
 
 #ifdef GLUCOSE
-#include "glucose/core/Solver.h"
 #include "glucose/core/SolverTypes.h"
 #include "glucose/utils/System.h"
 #else
-#include "minisat/core/Solver.h"
 #include "minisat/core/SolverTypes.h"
 #include "minisat/utils/System.h"
 #endif
@@ -66,8 +65,8 @@ using Minisat::l_True;
 using Minisat::l_Undef;
 using Minisat::lbool;
 using Minisat::Lit;
+using Minisat::mkLit;
 using Minisat::Var;
-
 using std::cout;
 using std::vector;
 
@@ -76,169 +75,114 @@ class MaxSolver;
 }
 
 namespace MaxHS_Iface {
+
+constexpr int64_t init_props_per_sec_guess{1024*1024*24};
 class SatSolver {
  public:
-  SatSolver()
-      : timer{0},
-        totalTime{0},
-        prevTotalTime{0},
-        stime{-1},
-        solves{0},
-        prevSolves{0} {}
-  virtual ~SatSolver() {}
+  SatSolver() = default;
+  virtual ~SatSolver() = default;
+  // TESTER FUNCTION
+  virtual const char* input_dimacs(const char* path, int& vars, int strict) = 0;
 
-  virtual bool status() const = 0;
   // Return false if unsat already detected (solver is in inconsistent state)
+  virtual bool theory_is_unsat() const = 0;
 
+  // Solve with assumptions. Track statistics.
+  // conflict and propagation budgets == -1 means no budget
+  // Return l_true/l_false/l_Undef formula is sat/unsat/budget-exceeded
+  //   If UNSAT put conflict clause into conflict (mapped to external numbering)
+  //   if SAT, the "modelValue" function allow access to satisfying assignment
   lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
                     int64_t confBudget, int64_t propBudget);
-  // Solve with assumptions. Track statistics.
-  // can set conflict and propagation budgets (-1 = no budget)
-  //   Return l_true/l_false/l_Undef formula is sat/unsat/budget-exceeded
-
-  //   If unsat put conflict clause into conflict (mapped to external numbering)
-  //   if sat, the "modelValue" function allow access to satisfying assignment
-
-  lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
-                    double timeLimit);
-  // minisat's runtime is not very predictable. So if no complex solves have
+  // satsolvers runtime is not very predictable. So if no complex solves have
   // been done before odds are the time taken will far from the timeLimit. The
   // accuracy of the timeLimit gets better as more solves are executed.
-
+  lbool solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
+                    double timeLimit);
   lbool solve(const vector<Lit>& assumps, vector<Lit>& conflict) {
     return solveBudget(assumps, conflict, -1, -1);
   }
-
   lbool solve() {
     vector<Lit> tc;
     return solve(vector<Lit>{}, tc);
   }
-
   lbool solveBudget(double timeLimit) {
     vector<Lit> tc;
     return solveBudget(vector<Lit>{}, tc, timeLimit);
   }
-
-  lbool solvePropBudget(int64_t propBudget) {
+  lbool solvePropBudget(int64_t pBudget) {
     vector<Lit> tc;
-    return solveBudget(vector<Lit>{}, tc, -1, propBudget);
+    return solveBudget(vector<Lit>{}, tc, -1, pBudget);
   }
-
+  lbool solvePropBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
+                        int64_t pBudget) {
+    return solveBudget(assumps, conflict, -1, pBudget);
+  }
   lbool solve(const vector<Lit>& assumps) {
     vector<Lit> tc;
     return solve(assumps, tc);
   }
-
   lbool solve(Lit l) {
     vector<Lit> tc;
     return solve(vector<Lit>{l}, tc);
   }
 
-  lbool relaxSolve(const vector<Lit>& assumps, const vector<Lit>& branchLits,
-                   double timeLimit);
-  // Do relaxed solve (where sat solver must initially branch on branchLits
+  int64_t props_per_time_period(double period) {
+    // try to estimate the number of props that would be done by the
+    // solver in period seconds. (Used to convert time bounds to prop
+    // bounds for the solver. If very few props or very little time has
+    // been spent on solving return a guess.
+    if(props_per_second_uncertain())
+      return init_props_per_sec_guess * period;
+    else
+      return (getNPropagations() / totalTime) * period;
+  }
+  bool props_per_second_uncertain() {
+    return getNPropagations() < init_props_per_sec_guess || totalTime < 1.0;
+  }
 
-  virtual lbool relaxSolve_(const vector<Lit>& assumps,
-                            const vector<Lit>& branchLits,
-                            int64_t propBudget) = 0;
+  virtual bool in_conflict(Lit l) = 0;
 
-  // preprocessing
-  virtual void freezeVar(Var v) = 0;
-  virtual bool eliminate(bool turn_off_elim) = 0;
-  virtual int nEliminated() = 0;
+  // Preprocessing
+  virtual lbool simplify(int rounds) = 0;
+  virtual void freezeLit(Lit l) = 0;
+  void freezeVar(Var v) { freezeLit(mkLit(v)); }
+  virtual void thawLit(Lit l) = 0;
+  void thawVar(Var v) { thawLit(mkLit(v)); }
 
-  // simplify clauses according to detected forced literals.
-  // return false if unsat already detected
-  virtual bool simplify() = 0;
+  // access to Unit prop
+  // Root level unit prop (to propagate original unit clauses)
+  virtual bool unit_propagate() = 0;
 
   // use unit prop to find literals implied by a conjunction of literals
   // "assumps: return false if assumps causes contradiction ---> ~assumps is
   // forced
-
   virtual bool findImplications(const vector<Lit>& assumps,
                                 vector<Lit>& imps) = 0;
-  virtual bool findImplications(const Lit p, vector<Lit>& imps) {
+  bool findImplications(Lit p, vector<Lit>& unitImps) {
     vector<Lit> tmp{p};
-    return findImplications(tmp, imps);
+    return findImplications(tmp, unitImps);
   }
-
-  virtual vector<Lit> getForced(int index) = 0;
-
-  // data from the solver
-  virtual bool inSolver(Lit lt) const {
-    return inSolver(var(lt));
-  }  // the solver knows about these variables
-  virtual bool inSolver(Var v) const = 0;
-  virtual int nAssigns() const = 0;  //# assigned variables
-  virtual int nClauses() const = 0;  //# original clauses
-  virtual int nInVars() const = 0;   //# internal variables
-  virtual size_t nVars()
-      const = 0;  //# number of external variables known to the solver.
-  virtual bool activeVar(
-      Var v) const = 0;  // Is this external variable active in the solver?
-                         // inactive if never added, eliminated by
-                         // preprocessing or forced.
-
-  // get upper bound on number of clauses in solver DB (some might be deleted or
-  // satisfied)
-  int getNClauses(bool learnts) {
-    return learnts ? get_learnts_size() : get_clauses_size();
+  bool findImplications(Lit p, Lit q, vector<Lit>& unitImps) {
+    vector<Lit> tmp{p, q};
+    return findImplications(tmp, unitImps);
   }
-  virtual int get_clauses_size() const = 0;
-  virtual int get_learnts_size() const = 0;
-  // get the ith clause from solvers DB (converted to external variables)
-  // if the empty vector is returned then there is no ith clause (was deleted or
-  // satisfied) or i is to large.
-  vector<Lit> getIthClause(int ith, bool learnts) {
-    return learnts ? getIth_learnts(ith) : getIth_clauses(ith);
-  }
-  virtual vector<Lit> getIth_clauses(int ith) const = 0;
-  virtual vector<Lit> getIth_learnts(int ith) const = 0;
-
-  // Reduce a sequence of lits by values forced at decision level 0.
-  //   ==> true if sequence has true or complimentary lits
-  //   ==> false otherwise, but also reset lts to remove any falsified lits.
-  //
-  virtual bool reduceClause(vector<Lit>& lts) const = 0;
 
   // add clause to theory, return theory status
-  virtual bool addClause(const vector<Lit>& lts) = 0;
-  bool addClause(Lit p) {
+  virtual void addClause(const vector<Lit>& lts) = 0;
+  void addClause(Lit p) {
     vector<Lit> tmp{p};
-    return (addClause(tmp));
+    addClause(tmp);
   }
-  bool addClause(Lit p, Lit q) {
+  void addClause(Lit p, Lit q) {
     vector<Lit> tmp{p, q};
-    return (addClause(tmp));
+    addClause(tmp);
   }
 
-  // set polarity of variable (lbool b = l_True if we give it a sign---set to
-  // false)
-  virtual void setPolarity(Var v, lbool b) = 0;
-
-  // set Var as decision (variable should already be known to the solver, e.g.,
-  // in added clause)
-  virtual void setDecisionVar(Var v, bool b) = 0;
-
-  // install variable b as a new control variables. b must not have been
-  // previously added if decisionVar is false the solver won't branch on b, if
-  // polarity is set when the solver does branch on b it will set its value to
-  // polarity (l_Undef lets the solver pick)
-  virtual void newControlVar(Var b, bool decisionVar = true,
-                             lbool polarity = l_Undef) = 0;
-
-  // free variable by setting l to TRUE, simplifying, and freeing var(l)
-  // to be available for future use.
-  virtual void freeVar(Lit l) = 0;
-
-  // get info from clause
-  virtual void printLit(Lit l) const = 0;
-
-  // Reverse heuristic ordering of variables
-  virtual void invertVarActivities() = 0;
-
-  // prune learnts
-  virtual void pruneLearnts() = 0;
+  // set default polarity of variable during decisions
+  // lbool b = l_Undef == unset polarity.
+  //         = l_True || l_False ---set variable true or false
+  virtual void setPolarity(lbool b, Var v) = 0;
 
   // obtain truth assignments of last model found by SAT solver.
   // The SAT solver will only set those variables it has been given, so
@@ -247,11 +191,26 @@ class SatSolver {
   virtual lbool modelValue(Lit p) const = 0;
   virtual lbool modelValue(Var x) const = 0;
 
-  // get current truth values (only set if variable is forced)
-  virtual lbool curVal(const Var x) const = 0;
-  lbool curVal(const Lit p) const { return curVal(var(p)) ^ sign(p); }
+  // true if literal is fixed (return l_Undef if variable is not
+  // forced)
+  virtual lbool fixedValue(Var x) = 0;
+  virtual lbool fixedValue(Lit p) = 0;
+  virtual vector<Lit> getForced(int) = 0;
+  virtual void updateFixed() = 0;
 
-  // stats
+  // get clauses of sat solver
+  virtual size_t getNclauses() const = 0; 
+  virtual bool get_ith_clause(vector<Lit>& cls, size_t i) const = 0;
+
+
+  // output and options
+  virtual void print_options() = 0;
+  virtual void print_resource_usage() = 0;
+  virtual void print_statistics() = 0;
+  virtual bool set_option(const char* name, int val) = 0;
+  virtual int get_option(const char* name) = 0;
+
+  // get stats about solver and mus usage.
   // Use startTimer and elapTime to accumulate time over a set of SAT solver
   // calls. nSolves() counts number of calls since startTimer solveTime for time
   // of most recent call.
@@ -263,26 +222,31 @@ class SatSolver {
   double solveTime() { return totalTime - prevTotalTime; }
   double total_time() {
     if (stime >= 0) {
+      //handle cass where interrupt happens in middle of sat solve
       totalTime += cpuTime() - stime;
       stime = -1;
     }
     return totalTime;
   }
   int nSolvesSinceTimer() { return (int)solves - prevSolves; }
-  int nSolves() { return (int)solves; }
+  int nSolves() { return solves; }
 
-  virtual uint64_t getProps() const = 0;
-  virtual uint64_t getConfs() const = 0;
+  virtual int64_t getNPropagations() const = 0;
+  virtual int64_t getNDecisions() const = 0;
+  virtual int64_t getNConflicts() const = 0;
+  virtual int64_t getNEliminated() const = 0;
+  virtual int64_t getNSubstituted() const = 0;
+  virtual int64_t getNFixed() const = 0;
+  virtual int64_t getNRedundant() const = 0;
+  virtual int64_t getNIrredundant() const = 0;
 
  protected:
   // interface to solver
   virtual lbool solve_(const vector<Lit>& assumps, vector<Lit>& conflict,
                        int64_t confBudget, int64_t propBudget) = 0;
-
   // stats
-  double timer, totalTime, prevTotalTime, stime;
-  int solves;
-  int prevSolves;
+  double timer{}, totalTime{}, prevTotalTime{}, stime{-1};
+  int solves{}, prevSolves{};
 };  // Class SatSolver
 
 typedef std::unique_ptr<SatSolver> SatSolver_uniqp;
