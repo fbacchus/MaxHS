@@ -32,83 +32,95 @@
    so that the external theory can be fed to the sat solver in parts with
    generating huge gaps in the variable numbering.
 
-   This also means however, that not all external variables will be given a value
-   by a found sat model.
+   This also means however, that not all external variables will be given a
+   value by a found sat model.
 
 */
 
 #include "maxhs/ifaces/SatSolver.h"
 
 namespace MaxHS_Iface {
-    lbool SatSolver::solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
-                                 int64_t confBudget, int64_t propBudget) {
-        /*******************************************************************
-     Solve with assumptions. Track statistics.
-     can set conflict and propagation budgets (-1 = no budget)
-     Return l_true/l_false/l_Undef formula is sat/unsat/budget-exceeded
+lbool SatSolver::solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
+                             int64_t confBudget, int64_t propBudget) {
+  /*******************************************************************
+Solve with assumptions. Track statistics.
+can set conflict and propagation budgets (-1 = no budget)
+Return l_true/l_false/l_Undef formula is sat/unsat/budget-exceeded
 
-     If unsat put conflict clause into conflict (mapped to external numbering)
-     if sat, the "modelValue" function allow access to satisfying assignment
-        *******************************************************************/
-      stime = cpuTime();
-      prevTotalTime = totalTime;
-      lbool val = solve_(assumps, conflict, confBudget, propBudget);
-      totalTime += cpuTime() - stime;
-      stime = -1;
-      solves++;
-      return val;
+If unsat put conflict clause into conflict (mapped to external numbering)
+if sat, the "modelValue" function allow access to satisfying assignment
+  *******************************************************************/
+  stime = cpuTime();
+  prevTotalTime = totalTime;
+
+  // cout << "SatSolver confBudget = " << confBudget << " propBudget " <<
+  // propBudget << "\n";
+
+  lbool val = solve_(assumps, conflict, confBudget, propBudget);
+  totalTime += cpuTime() - stime;
+  stime = -1;
+  solves++;
+  return val;
+}
+
+lbool SatSolver::solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict,
+                             double timeLimit) {
+  // minisat's runtime is not very predictable. So if no complex solves have
+  // been done before odds are the time taken will far from the timeLimit. The
+  // accuracy of the timeLimit gets better as more solves are executed.
+  int64_t propBudget, props;
+  props = getProps();  // returns total number of props done by solver
+  bool didTrial{false};
+
+  if (solves > 0 && props > 0) {
+    propBudget = props / totalTime * timeLimit;
+  } else {
+    propBudget = 1024 * 1024 * 10;
+    didTrial = true;
+  }
+  stime = cpuTime();
+  prevTotalTime = totalTime;
+
+  // cout << "SatSolver 1. timelimit = " << timeLimit << " confBudget = -1 " <<
+  // propBudget << "\n";
+
+  lbool val = solve_(assumps, conflict, -1, propBudget);
+  solves++;
+  double solvetime1 = cpuTime() - stime;
+  if (didTrial && val == l_Undef && solvetime1 < timeLimit * .60) {
+    auto moreProps =
+        int64_t((getProps() - props) / solvetime1 * timeLimit - propBudget);
+    if (moreProps > propBudget * 0.5) {
+      val = solve_(assumps, conflict, -1, moreProps);
+      // cout << "SatSolver 2. timelimit = " << timeLimit << " confBudget = -1"
+      // << " propBudget " << moreProps << "\n";
     }
+    solves++;
+  }
+  totalTime += cpuTime() - stime;
+  stime = -1;
+  return val;
+}
 
-    lbool SatSolver::solveBudget(const vector<Lit>& assumps, vector<Lit>& conflict, double timeLimit)  {
-      //minisat's runtime is not very predictable. So if no complex solves have been done before
-      //odds are the time taken will far from the timeLimit.
-      //The accuracy of the timeLimit gets better as more solves are executed.
-      int64_t propBudget, props;
-      props = getProps(); //returns total number of props done by solver
-      bool didTrial {false};
-
-      if(solves > 0 && props > 0) {
-        propBudget = props/totalTime * timeLimit;
-      }
-      else {
-        propBudget = 1024*1024*10;
-        didTrial = true;
-      }
-      stime = cpuTime();
-      prevTotalTime = totalTime;
-      lbool val = solve_(assumps, conflict, -1, propBudget);
-      solves++;
-      double solvetime1 = cpuTime() - stime;
-      if(didTrial && val == l_Undef && solvetime1 < timeLimit*.60) {
-        auto moreProps = int64_t((getProps()-props)/solvetime1 * timeLimit - propBudget);
-        if (moreProps > propBudget*0.5) {
-          val =  solve_(assumps, conflict, -1, moreProps);
-        }
-        solves++;
-      }
-      totalTime += cpuTime() - stime;
-      stime = -1;
-      return val;
-    }
-
-    lbool SatSolver::relaxSolve(const vector<Lit>& assumps, const vector<Lit>& branchLits, double timeLimit) {
-        //Do relaxed solve (where sat solver must initially branch on branchLits
-      int64_t propBudget, props;
-      if(timeLimit <= 0)
-        propBudget = -1;
-      else {
-        props = getProps(); //returns total number of props done by solver
-        if(solves > 0 && props > 0)
-          propBudget = props/totalTime * timeLimit;
-        else
-          propBudget = 1024*1024*10;
-      }
-      stime = cpuTime();
-      prevTotalTime = totalTime;
-      auto val = relaxSolve_(assumps, branchLits, propBudget);
-      solves++;
-      totalTime += cpuTime() - stime;
-      stime = -1;
-      return val;
-    }
-} //namespace
+lbool SatSolver::relaxSolve(const vector<Lit>& assumps,
+                            const vector<Lit>& branchLits, double timeLimit) {
+  // Do relaxed solve (where sat solver must initially branch on branchLits
+  int64_t propBudget, props;
+  if (timeLimit <= 0)
+    propBudget = -1;
+  else {
+    props = getProps();  // returns total number of props done by solver
+    if (solves > 0 && props > 0)
+      propBudget = props / totalTime * timeLimit;
+    else
+      propBudget = 1024 * 1024 * 10;
+  }
+  stime = cpuTime();
+  prevTotalTime = totalTime;
+  auto val = relaxSolve_(assumps, branchLits, propBudget);
+  solves++;
+  totalTime += cpuTime() - stime;
+  stime = -1;
+  return val;
+}
+}  // namespace MaxHS_Iface

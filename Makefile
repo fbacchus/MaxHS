@@ -14,8 +14,8 @@ LINUX_CPLEXLIBDIR   ?= /w/63/fbacchus/CPLEX_Studio1210/cplex/lib/x86-64_linux/st
 LINUX_CPLEXINCDIR   ?= /w/63/fbacchus/CPLEX_Studio1210/cplex/include
 #
 #If you want to build on macos
-DARWIN_CPLEXLIBDIR   ?= /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio128/cplex/lib/x86-64_osx/static_pic/
-DARWIN_CPLEXINCDIR   ?= /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio128/cplex/include
+DARWIN_CPLEXLIBDIR   ?= /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio1210/cplex/lib/x86-64_osx/static_pic/
+DARWIN_CPLEXINCDIR   ?= /Users/fbacchus/Applications/IBM/ILOG/CPLEX_Studio1210/cplex/include
 
 ifeq "$(shell uname)" "Linux"
 CPLEXLIBDIR   =$(LINUX_CPLEXLIBDIR)
@@ -30,7 +30,7 @@ endif
 BUILD_DIR      ?= build
 
 # Include debug-symbols in release builds?
-MAXHS_RELSYM ?= -g
+#MAXHS_RELSYM ?= -g
 
 # Sat solver you can use minisat of glucose. minisat is faster.for maxhs
 SATSOLVER = minisat
@@ -100,7 +100,7 @@ $(BUILD_DIR)/profile/%.o:			MAXHS_CXXFLAGS +=$(MAXHS_PRF) -pg
 ## Build-type Link-flags:
 $(BUILD_DIR)/profile/bin/$(MAXHS):		MAXHS_LDFLAGS += -pg
 ifeq "$(shell uname)" "Linux"
-$(BUILD_DIR)/release/bin/$(MAXHS):		MAXHS_LDFLAGS += -z muldefs
+$(BUILD_DIR)/release/bin/$(MAXHS):		MAXHS_LDFLAGS += --static -z muldefs
 endif
 $(BUILD_DIR)/release/bin/$(MAXHS):		MAXHS_LDFLAGS += $(MAXHS_RELSYM)
 

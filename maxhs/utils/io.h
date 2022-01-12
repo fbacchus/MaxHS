@@ -44,55 +44,42 @@ using std::ostream;
 using std::vector;
 
 inline ostream& operator<<(ostream& os, const Minisat::Lit& l) {
-  if(l == Minisat::lit_Undef) 
+  if (l == Minisat::lit_Undef)
     os << "lit_Undef";
   else if (l == Minisat::lit_Error)
     os << "lit_Error";
   else
-    os << (Minisat::sign(l) ? "-" : "") << (Minisat::var(l)+1);
+    os << (Minisat::sign(l) ? "-" : "") << (Minisat::var(l) + 1);
   return os;
 }
 
 inline ostream& operator<<(ostream& os, const Minisat::lbool& l) {
-  os << (
-    (l == Minisat::l_Undef) ? "U" : 
-          (l == Minisat::l_True ? "T" : "F")
-    );
+  os << ((l == Minisat::l_Undef) ? "U" : (l == Minisat::l_True ? "T" : "F"));
   return os;
 }
 
-template<typename T>
+template <typename T>
 ostream& operator<<(ostream& os, const vector<T>& v) {
   os << "[ ";
-  for(const auto& i : v) 
-    os << i << " ";
+  for (size_t i = 0; i < v.size() && i < 30; ++i) os << v[i] << " ";
+  if (v.size() > 30) os << "...";
   os << "] (" << v.size() << ")";
   return os;
 }
 
-template<typename T>
+template <typename T>
 ostream& operator<<(ostream& os, const Minisat::vec<T>& v) {
   os << "[ ";
-  for(int i = 0; i < v.size(); i++) 
-    os << v[i] << " ";
+  for (int i = 0; i < v.size() && i < 30; i++) os << v[i] << " ";
+  if (v.size() > 30) os << "...";
   os << "] (" << v.size() << ")";
   return os;
 }
 
-template<typename T>
-ostream& operator<<(ostream& os, const Minisat::LSet& v) {
-  os << "[ ";
-  for(int i = 0; i < v.size(); i++)
-    os << v[i] << " ";
-  os << "] (" << v.size() << ")";
-  return os;
-}
-
-template<typename T>
+template <typename T>
 ostream& operator<<(ostream& os, const Packed_vecs<T>& pv) {
-  for(const auto& v : pv) {
-    for(const auto& item : v) 
-      os << item << " ";
+  for (const auto& v : pv) {
+    for (const auto& item : v) os << item << " ";
     os << "0 \n";
   }
   return os;

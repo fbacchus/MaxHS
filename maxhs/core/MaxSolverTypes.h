@@ -30,4 +30,7 @@ typedef double Weight;
 enum class CoreType { cores, nonCores, mixed };
 enum class CoreRelaxFn { rand, maxoccur, frac, dsjn };
 
+enum { _ERROR_ = 50 };
+enum { _INCREMENTAL_NONE_ = 0 };
+enum { _CARD_TOTALIZER_ = 0 };
 #endif

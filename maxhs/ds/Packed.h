@@ -21,63 +21,63 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ***********/
 
-
 #ifndef PACKED_VEC_H
 #define PACKED_VEC_H
 
-#include <vector>
+#include <algorithm>
 #include <ostream>
 #include <utility>
-#include <algorithm>
+#include <vector>
 
-using std::vector;
 using std::cout;
+using std::vector;
 
 /* pack a set of vectors into a single vector.
    This implemenation only works for concrete types of classes.
    There is no support for erasing elements (either packed
    vectors or elements of the packed vector) */
-template<typename T>
+template <typename T>
 class Packed_vecs {
-public:
-  class ivec;         //Accessor for an internal vector
+ public:
+  class ivec;  // Accessor for an internal vector
   class const_ivec;
-  class iterator;     //iterator over internal vectors
+  class iterator;  // iterator over internal vectors
   class const_iterator;
 
-  Packed_vecs() {};
+  Packed_vecs(){};
   Packed_vecs(vector<vector<T>> init_vecs);
-  Packed_vecs(std::initializer_list<vector<T>> ilist); 
+  Packed_vecs(std::initializer_list<vector<T>> ilist);
 
-  //keep default move constructors and assignments. 
-  Packed_vecs(Packed_vecs &&) = default;
-  Packed_vecs& operator=(Packed_vecs &&) = default;
-  
-  size_t size() const;        //# of internal vecs (including zero sized vecs)
+  // keep default move constructors and assignments.
+  Packed_vecs(Packed_vecs&&) = default;
+  Packed_vecs& operator=(Packed_vecs&&) = default;
+
+  size_t size() const;  //# of internal vecs (including zero sized vecs)
   bool empty() const { return !size(); }
 
-  const ivec operator[](size_t);  //accessor for i'th internal vec
-  const const_ivec operator[](size_t) const;  
-  iterator begin();           //iterator over internal vecs
+  const ivec operator[](size_t);  // accessor for i'th internal vec
+  const const_ivec operator[](size_t) const;
+  iterator begin();  // iterator over internal vecs
   iterator end();
   const_iterator begin() const;
   const_iterator end() const;
 
   /* internal vectors <--> standard vectors */
-  void addVec(const vector<T> &); //will add and get zero sized vecs.
-  vector<T> getVec (size_t i) const;
-  size_t ithSize(size_t i) const; //Return size of i-th internal vector
+  void addVec(const vector<T>&);  // will add and get zero sized vecs.
+  vector<T> getVec(size_t i) const;
+  size_t ithSize(size_t i) const;  // Return size of i-th internal vector
 
-  void compress(); //remove spaces; Retain zero length vectors
-  void rm_empty_vecs();  //remove zero length vectors...don't do this
-			 //to save space as they don't occupy much
-			 //space
-  void clear() { //release allVec's memory
+  void compress();       // remove spaces; Retain zero length vectors
+  void rm_empty_vecs();  // remove zero length vectors...don't do this
+                         // to save space as they don't occupy much
+                         // space
+  void clear() {         // release allVec's memory
     vector<T> tmp;
     std::swap(allVecs, tmp);
     offsets.clear();
-    sizes.clear(); }
-  
+    sizes.clear();
+  }
+
   size_t capacity() const { return allVecs.capacity(); }
   void reserve(size_t n) { allVecs.reserve(n); }
   size_t total_size() const { return allVecs.size(); }
@@ -88,155 +88,170 @@ public:
        begin, end are standard vector iterators so various
        <algorithms> (e.g., sort) can be run on the internal vector (a
        subsequence of a std::vector) */
-  public:
-    ivec(Packed_vecs<T> * pv, size_t index): i(index),  p(pv) {}
+   public:
+    ivec(Packed_vecs<T>* pv, size_t index) : i(index), p(pv) {}
     size_t size() const { return p->sizes[i]; }
     bool empty() const { return !size(); }
 
-    typename vector<T>::iterator begin() const { return p->allVecs.begin()+p->offsets[i]; }
-    typename vector<T>::iterator end() const { return begin()+p->sizes[i]; }
-    T& operator[](size_t j) const { return p->allVecs[p->offsets[i]+j]; }
+    typename vector<T>::iterator begin() const {
+      return p->allVecs.begin() + p->offsets[i];
+    }
+    typename vector<T>::iterator end() const { return begin() + p->sizes[i]; }
+    T& operator[](size_t j) const { return p->allVecs[p->offsets[i] + j]; }
     void shrink(size_t n) const { p->sizes[i] -= n; }
     vector<T> getVec() const { return p->getVec(i); }
-  private:
+
+   private:
     size_t i;
-    Packed_vecs<T> *p;
+    Packed_vecs<T>* p;
   };
-  
+
   class const_ivec {
-  public:
-    const_ivec(const Packed_vecs<T> *pv, size_t index): i (index), p (pv) {}
-    const_ivec(ivec iv): p (iv.p), i (iv.i) {}
+   public:
+    const_ivec(const Packed_vecs<T>* pv, size_t index) : i(index), p(pv) {}
+    const_ivec(ivec iv) : p(iv.p), i(iv.i) {}
     size_t size() const { return p->sizes[i]; }
     bool empty() const { return !size(); }
     typename vector<T>::const_iterator begin() const {
-      return p->allVecs.cbegin()+p->offsets[i]; }
+      return p->allVecs.cbegin() + p->offsets[i];
+    }
     typename vector<T>::const_iterator end() const {
-      return begin()+p->sizes[i]; }
-    const T& operator[](size_t j) const { return p->allVecs[p->offsets[i]+j]; }
+      return begin() + p->sizes[i];
+    }
+    const T& operator[](size_t j) const {
+      return p->allVecs[p->offsets[i] + j];
+    }
     const vector<T> getVec() const { return p->getVec(i); }
-  private:
+
+   private:
     size_t i;
-    const Packed_vecs<T> * p;
+    const Packed_vecs<T>* p;
   };
 
   class iterator {
-  public:
-    iterator(Packed_vecs<T> *pv, size_t pos) : _pos(pos), _pv(pv) {}
-    bool operator!=(iterator &other) const { 
-      return (_pv != other._pv || _pos != other._pos); 
+   public:
+    iterator(Packed_vecs<T>* pv, size_t pos) : _pos(pos), _pv(pv) {}
+    bool operator!=(iterator& other) const {
+      return (_pv != other._pv || _pos != other._pos);
     }
-    iterator& operator++() { _pos++; return *this; }
+    iterator& operator++() {
+      _pos++;
+      return *this;
+    }
     const ivec operator*() { return ivec(_pv, _pos); }
-  private:
+
+   private:
     size_t _pos;
-    Packed_vecs<T> * _pv;
+    Packed_vecs<T>* _pv;
   };
 
   class const_iterator {
-  public:
-    const_iterator(const Packed_vecs<T> *pv, size_t pos) : _pos(pos), _pv(pv) {}
+   public:
+    const_iterator(const Packed_vecs<T>* pv, size_t pos) : _pos(pos), _pv(pv) {}
     const_iterator(iterator i) : _pos(i._pos), _pv(i._pv) {}
-    bool operator!=(const_iterator &other) const {
-      return (_pv != other._pv || _pos != other._pos); 
+    bool operator!=(const_iterator& other) const {
+      return (_pv != other._pv || _pos != other._pos);
     }
-    const_iterator& operator++() { _pos++; return *this; }
+    const_iterator& operator++() {
+      _pos++;
+      return *this;
+    }
     const const_ivec operator*() { return const_ivec(_pv, _pos); }
-  private:
+
+   private:
     size_t _pos;
-    const Packed_vecs<T> * _pv;
+    const Packed_vecs<T>* _pv;
   };
 
-private:
+ private:
   vector<size_t> offsets;
   vector<T> allVecs;
   vector<size_t> sizes;
 };
 
 template <class T>
-inline size_t Packed_vecs<T>::size() const { return offsets.size(); }
+inline size_t Packed_vecs<T>::size() const {
+  return offsets.size();
+}
 
 template <class T>
-inline const typename Packed_vecs<T>::ivec Packed_vecs<T>::operator[](size_t i) 
-{
+inline const typename Packed_vecs<T>::ivec Packed_vecs<T>::operator[](
+    size_t i) {
   return ivec(this, i);
 }
 
 template <class T>
-inline const typename Packed_vecs<T>::const_ivec Packed_vecs<T>::operator[](size_t i) const
-{
-  return const_ivec(this, i); 
+inline const typename Packed_vecs<T>::const_ivec Packed_vecs<T>::operator[](
+    size_t i) const {
+  return const_ivec(this, i);
 }
 
 template <class T>
-inline typename Packed_vecs<T>::iterator Packed_vecs<T>::begin() { return iterator(this, 0); }
+inline typename Packed_vecs<T>::iterator Packed_vecs<T>::begin() {
+  return iterator(this, 0);
+}
 
 template <class T>
 inline typename Packed_vecs<T>::iterator Packed_vecs<T>::end() {
-  return iterator(this, offsets.size()); 
+  return iterator(this, offsets.size());
 }
 
 template <class T>
 inline typename Packed_vecs<T>::const_iterator Packed_vecs<T>::begin() const {
-  return const_iterator(this, 0); 
+  return const_iterator(this, 0);
 }
 
 template <class T>
-inline typename Packed_vecs<T>::const_iterator Packed_vecs<T>::end() const { 
-  return const_iterator(this, offsets.size()); 
+inline typename Packed_vecs<T>::const_iterator Packed_vecs<T>::end() const {
+  return const_iterator(this, offsets.size());
 }
 
 template <class T>
-inline void Packed_vecs<T>::addVec(const vector<T> &v) 
-{
+inline void Packed_vecs<T>::addVec(const vector<T>& v) {
   offsets.push_back(allVecs.size());
   sizes.push_back(v.size());
-  for(size_t i = 0; i < v.size(); i++)
+  for (size_t i = 0; i < v.size(); i++) {
     allVecs.push_back(v[i]);
+  }
 }
 
 template <class T>
-inline vector<T> Packed_vecs<T>::getVec(size_t i) const
-{
+inline vector<T> Packed_vecs<T>::getVec(size_t i) const {
   vector<T> v;
-  for(size_t j = offsets[i]; j < offsets[i] + sizes[i]; j++)
+  for (size_t j = offsets[i]; j < offsets[i] + sizes[i]; j++)
     v.push_back(allVecs[j]);
   return v;
 }
 
 template <class T>
-inline size_t Packed_vecs<T>::ithSize(size_t i) const
-{
+inline size_t Packed_vecs<T>::ithSize(size_t i) const {
   return sizes[i];
 }
 
 template <class T>
-inline void Packed_vecs<T>::compress()
-{
+inline void Packed_vecs<T>::compress() {
   size_t to = 0;
   size_t cur_vec;
   /* skip compressed prefix */
-  for(cur_vec = 0; cur_vec < offsets.size(); cur_vec++) {
-    if (offsets[cur_vec] != to)
-      break;
+  for (cur_vec = 0; cur_vec < offsets.size(); cur_vec++) {
+    if (offsets[cur_vec] != to) break;
     to += sizes[cur_vec];
   }
-  for( ; cur_vec < offsets.size(); cur_vec++) {
+  for (; cur_vec < offsets.size(); cur_vec++) {
     size_t start = offsets[cur_vec];
     offsets[cur_vec] = to;
-    for(size_t j = 0; j < sizes[cur_vec]; j++)
-      allVecs[to++] = allVecs[start+j];
+    for (size_t j = 0; j < sizes[cur_vec]; j++)
+      allVecs[to++] = allVecs[start + j];
   }
   allVecs.resize(offsets.back() + sizes.back());
 }
 
 template <class T>
-inline void Packed_vecs<T>::rm_empty_vecs()
-{
+inline void Packed_vecs<T>::rm_empty_vecs() {
   size_t from;
   size_t to;
-  for(to = from = 0;  from < offsets.size(); from++) 
-    if(sizes[from] > 0) {
+  for (to = from = 0; from < offsets.size(); from++)
+    if (sizes[from] > 0) {
       offsets[to] = offsets[from];
       sizes[to] = sizes[from];
       to++;
@@ -246,26 +261,21 @@ inline void Packed_vecs<T>::rm_empty_vecs()
 }
 
 template <class T>
-inline Packed_vecs<T>::Packed_vecs(vector<vector <T>> init_vecs)
-{
-  for(auto& item : init_vecs) 
-    addVec(item);
+inline Packed_vecs<T>::Packed_vecs(vector<vector<T>> init_vecs) {
+  for (auto& item : init_vecs) addVec(item);
 }
 
 template <class T>
-inline Packed_vecs<T>::Packed_vecs(std::initializer_list<vector<T>> ilist)
-{
-  for(auto& item: ilist)
-    addVec(item);
+inline Packed_vecs<T>::Packed_vecs(std::initializer_list<vector<T>> ilist) {
+  for (auto& item : ilist) addVec(item);
 }
 
-
-/* 
-//Example Usage. 
+/*
+//Example Usage.
 #include <iostream>
 #include <vector>
 
-int main (int argc, char * const argv[]) 
+int main (int argc, char * const argv[])
 {
   Packed_vecs<int> pv;
   vector<int> v1 {1, 2, 3, 4};
@@ -282,7 +292,7 @@ int main (int argc, char * const argv[])
   //Following should work for pv, pv1, or pv2.
 
   pv1[0][0] = 999;
-  
+
   auto v = pv1[0];
   cout << "pv1[0].size() = " << v.size() << "\n";
   //Flagged as error by compiler:  pv1[0] = pv1[1];
@@ -313,7 +323,7 @@ int main (int argc, char * const argv[])
   cout << "T4 range-for Packed_vecs access\n";
   for(auto v : pv2) {
     cout << "Vec:" << "\n" << "[";
-    for(auto& item : v) 
+    for(auto& item : v)
       cout << item << ", ";
     cout << "]\n";
   }
