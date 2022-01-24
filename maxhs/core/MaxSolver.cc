@@ -71,7 +71,10 @@ MaxSolver::MaxSolver(Wcnf* f)
       blit_lt{&bLitOccur, bvars, false},
       blit_gt{&bLitOccur, bvars, true} {
   params.instance_file_name = theWcnf->fileName();
-  if (theWcnf->integerWts()) absGap = 0.75;
+  if (theWcnf->integerWts())
+    absGap = 0.75;
+  else
+    wt_fmt.precision(6);
   summations = new SumManager(bvars, this, muser, satsolver);
   cplex = new Cplex{bvars, summations, UBmodelSofts, UBmodel,
                     theWcnf->integerWts()};
@@ -83,9 +86,7 @@ MaxSolver::MaxSolver(Wcnf* f)
     satsolver->set_option("verbose", params.sverbosity);
     satsolver->set_option("report", 1);
     satsolver->set_option("quiet", 0);
-    if (params.sverbosity > 2) {
-      satsolver->set_option("log", 1);
-    }
+    if (params.sverbosity > 2) { satsolver->set_option("log", 1); }
   } else {
     satsolver->set_option("report", 0);
     satsolver->set_option("quiet", 1);
@@ -351,9 +352,7 @@ void MaxSolver::allClausesSeeded_maxsat() {
            << "  constraints\n";
     cplexsoln.clear();
     cplexLB = cplex->solve(cplexsoln, 0);
-    if (cplexLB < 0) {
-      printErrorAndExit("c ERROR: Cplex::solve() failed");
-    }
+    if (cplexLB < 0) { printErrorAndExit("c ERROR: Cplex::solve() failed"); }
   }
 
   if (any_false(cplexsoln))
@@ -434,8 +433,7 @@ bool MaxSolver::do_abstraction() const {
   bool prev_iteration_from_abstraction =
       (track_abs_triggers.did_abstraction.size() > 2) &&
       *(track_abs_triggers.did_abstraction.end() - 3);
-  bool prev_iteration_good =
-      !prev_iteration_from_abstraction &&
+  bool prev_iteration_good = !prev_iteration_from_abstraction &&
       !iteration_is_bad(params.abstract_gap,
                         *(track_abs_triggers.deltas.end() - 2),
                         *(track_abs_triggers.gaps.end() - 2));
@@ -506,9 +504,7 @@ void MaxSolver::seqOfSAT_maxsat() {
       cplex_UB = fmin(prev_cplex_solution_obj, UB());
 
     Weight cplexLB = cplex->solve(cplexsoln, cplex_UB);
-    if (cplexLB < 0) {
-      printErrorAndExit("c ERROR: Cplex::solve() failed");
-    }
+    if (cplexLB < 0) { printErrorAndExit("c ERROR: Cplex::solve() failed"); }
     updateLB(cplexLB);
 
     // solution cost is UB
@@ -836,9 +832,7 @@ bool MaxSolver::tryHarden_with_lp_soln(const Weight lp_objval,
 
   for (size_t i = 0; i < cplex_vars.size(); i++) {
     Var v = cplex_vars[i];
-    if (satsolver->fixedValue(v) != l_Undef) {
-      continue;
-    }
+    if (satsolver->fixedValue(v) != l_Undef) { continue; }
     if (lp_redvals[i] > 0) {
       // var true incurs cost
       if (lp_redvals[i] + lp_objval > UB() + 0.01 ||
@@ -1084,8 +1078,7 @@ vector<Lit> MaxSolver::fracOfCore(int nSinceCplex, vector<Lit>& core) {
   int nToReturn{1};
   if (nSinceCplex > params.frac_rampup_start) {
     if (nSinceCplex < params.frac_rampup_end)
-      fracToReturn *=
-          (nSinceCplex - params.frac_rampup_start) /
+      fracToReturn *= (nSinceCplex - params.frac_rampup_start) /
           (1.0 * (params.frac_rampup_end - params.frac_rampup_start));
     nToReturn = ceil(fracToReturn * ((double)core.size()));
   }
@@ -1124,12 +1117,8 @@ Lit MaxSolver::maxOccurring(const vector<Lit>& core) {
 
 void MaxSolver::incrBLitOccurrences(const vector<Lit>& core) {
   // all lits in core should be bvars!
-  if (core.size() > static_cast<size_t>(top_freq)) {
-    top_freq = core.size();
-  }
-  for (auto l : core) {
-    bLitOccur[bvars.toIndex(l)] += 1;
-  }
+  if (core.size() > static_cast<size_t>(top_freq)) { top_freq = core.size(); }
+  for (auto l : core) { bLitOccur[bvars.toIndex(l)] += 1; }
 }
 
 // TODO: Consider unifying the add clause/add new forced bvar
@@ -1180,9 +1169,7 @@ int MaxSolver::cplexAddNewForcedBvars() {
            }*/
 
   for (auto l : forced) {
-    if (summations->isSoutput(l)) {
-      tv++;
-    }
+    if (summations->isSoutput(l)) { tv++; }
     if (bvars.isBvar(l) || summations->isSoutput(l) || cplex->lit_in_cplex(l)) {
       nf++;
       cplexAddCls({l});
@@ -1334,8 +1321,8 @@ void MaxSolver::seed_equivalence() {
       is_mixed &= bvars.isBvar(l);
     }
     bool keep = seed_all || theWcnf->orig_all_lits_are_softs() || is_core ||
-                (is_ncore && params.seed_type > 1) ||
-                (is_mixed && params.seed_type > 2);
+        (is_ncore && params.seed_type > 1) ||
+        (is_mixed && params.seed_type > 2);
     if (!keep) {
       seedingCls.clear();
       if (!isLearnt) allClausesSeeded = false;
@@ -1361,7 +1348,7 @@ void MaxSolver::seed_equivalence() {
 
   if (params.verbosity > 0) {
     auto n = cplex_cores.size() + cplex_ncores.size() + cplex_mixed.size() +
-             cplex_ordinary.size();
+        cplex_ordinary.size();
     cout << "c EqSeed: found " << n << " seedable constraints.\n";
     cout << "c EqSeed: " << cplex_cores.size() << " cores "
          << cplex_ncores.size() << " non-cores " << cplex_mixed.size()
@@ -1429,31 +1416,32 @@ void MaxSolver::printStatsAndExit(int signum, int exitType) {
     double cpu_time = cpuTime();
     double mem_used = Minisat::memUsedPeak();
 
-    if (signum >= 0) {
-      cout << "c INTERRUPTED signal " << signum << "\n";
-    }
+    if (signum >= 0) { cout << "c INTERRUPTED signal " << signum << "\n"; }
     if (!solved) {
       cout << "c unsolved\n";
       cout << "c Best LB Found: " << wt_fmt(LB() + theWcnf->baseCost()) << "\n";
       cout << "c Best UB Found: " << wt_fmt(UB() + theWcnf->baseCost()) << "\n";
-
       Weight solCost = UB() + theWcnf->baseCost();
       cout << "o " << wt_fmt(solCost) << "\n";
       cout << "s UNKNOWN\n";
-      if (params.printBstSoln) {
-        cout << "c Best Model Found:\n";
-        if (haveUBModel) {
+      if (haveUBModel) {
+        if (params.printBstSoln) {
+          cout << "c Best Model Found:\n";
           printSolution(UBmodel);
-          int nfalseSofts;
-          if (theWcnf->checkModelFinal(UBmodel, nfalseSofts) !=
-              UB() + theWcnf->baseCost())  // we cannot use wcnf after this!
-            cout << "c ERROR incorrect model reported" << std::endl;
-          else
-            cout << "c Solved: Number of falsified softs = " << nfalseSofts
-                 << "\n";
-        } else
-          cout << "c No Model of hard clauses found\n";
-      }
+        }
+        int nfalseSofts;
+        auto model_cost = theWcnf->checkModel(UBmodel, nfalseSofts);
+        if (fabs(model_cost - solCost) > absGap)
+          cout << "c ERROR incorrect model reported\n"
+               << "c model cost = " << wt_fmt(model_cost)
+               << " computed cost = " << wt_fmt(solCost) << "(UB = " << UB()
+               << " basecost = " << wt_fmt(theWcnf->baseCost())
+               << ") difference = " << wt_fmt(model_cost - solCost)
+               << std::endl;
+        else
+          cout << "c Number of falsified softs = " << nfalseSofts << "\n";
+      } else
+        cout << "c No Model of hard clauses found\n";
     }
 
     cout << "c SAT: #calls " << satsolver->nSolves() << "\n";
@@ -1467,12 +1455,12 @@ void MaxSolver::printStatsAndExit(int signum, int exitType) {
     cout << "c SAT: Minimize time " << time_fmt(muser->total_time()) << " ("
          << time_fmt(satsolver->total_time() + muser->total_time()
                          ? muser->total_time() * 100.0 /
-                               (satsolver->total_time() + muser->total_time())
+                             (satsolver->total_time() + muser->total_time())
                          : 0)
          << "%)\n";
     cout << "c SAT: Avg constraint minimization "
          << fix4_fmt(cplex->nCnstr() ? amountConflictMin /
-                                           static_cast<double>(cplex->nCnstr())
+                             static_cast<double>(cplex->nCnstr())
                                      : 0)
          << "\n";
     cout << "c SAT: number of variables substituted "
@@ -1494,7 +1482,7 @@ void MaxSolver::printStatsAndExit(int signum, int exitType) {
     if (cplex->nNonCores())
       cout << "c CPLEX: Ave non-core size "
            << fix4_fmt(cplex->nNonCores() ? (cplex->totalNonCore()) /
-                                                (double)cplex->nNonCores()
+                               (double)cplex->nNonCores()
                                           : 0)
            << "\n";
 
@@ -1504,9 +1492,8 @@ void MaxSolver::printStatsAndExit(int signum, int exitType) {
     if (params.lp_harden) {
       cout << "c LP-Bounds: Forced "
            << n_softs_forced_hard + n_softs_forced_false +
-                  n_softs_forced_hard_not_in_cplex + n_ovars_forced_true +
-                  n_ovars_forced_false + n_touts_forced_true +
-                  n_touts_forced_false
+              n_softs_forced_hard_not_in_cplex + n_ovars_forced_true +
+              n_ovars_forced_false + n_touts_forced_true + n_touts_forced_false
            << " variables\n";
       if (n_softs_forced_hard > 0)
         cout << "c   hardened softs:              " << n_softs_forced_hard
@@ -1570,10 +1557,9 @@ lbool MaxSolver::satsolve_min(const Assumps& inAssumps,
                               vector<Lit>& outConflict, double sat_cpu_lim,
                               double mus_cpu_lim) {
   double isatTime{0};
-  lbool result =
-      (sat_cpu_lim > 0)
-          ? satsolver->solveBudget(inAssumps.vec(), outConflict, sat_cpu_lim)
-          : satsolver->solve(inAssumps.vec(), outConflict);
+  lbool result = (sat_cpu_lim > 0)
+      ? satsolver->solveBudget(inAssumps.vec(), outConflict, sat_cpu_lim)
+      : satsolver->solve(inAssumps.vec(), outConflict);
   if (params.verbosity > 2) {
     cout << "c satsolve_min sat result = " << result
          << " conflict = " << outConflict << "\n";
@@ -1647,11 +1633,11 @@ void MaxSolver::minimize_muser(vector<Lit>& con, double mus_cpu_lim) {
   }
 
   doMin = params.mus_min_red <= 0
-          //|| (mtime < 124.0) //give muser some time to allow rate computation
-          // to be more accurate
-          || mcalls < 4 || (mtime < 64.0)  // give muser some time to allow rate
-                                           // computation to be more accurate
-          || (mcalls && (m_sum_reduced_frac / mcalls) > params.mus_min_red);
+      //|| (mtime < 124.0) //give muser some time to allow rate computation
+      // to be more accurate
+      || mcalls < 4 || (mtime < 64.0)  // give muser some time to allow rate
+                                       // computation to be more accurate
+      || (mcalls && (m_sum_reduced_frac / mcalls) > params.mus_min_red);
 
   if (params.verbosity > 1)
     cout << "c doMin = " << doMin << " mtime = " << mtime
@@ -1748,9 +1734,7 @@ bool MaxSolver::deleteLearntTest(const vector<Lit>& c) const {
     }
   }
   // no b-var==> hard learnt
-  if (!containsBVar) {
-    return false;
-  }
+  if (!containsBVar) { return false; }
   return true;
 }
 
@@ -1773,9 +1757,13 @@ void MaxSolver::optFound(const std::string& reason) {
   solved = true;
   printSolution(UBmodel);
   int nfalseSofts;
-  if (theWcnf->checkModelFinal(UBmodel, nfalseSofts) !=
-      UB() + theWcnf->baseCost())  // we cannot use wcnf after this!
-    cout << "c ERROR incorrect model reported" << std::endl;
+  Weight model_cost = theWcnf->checkModelFinal(UBmodel, nfalseSofts);
+  if (fabs(model_cost - solCost) > absGap)
+    cout << "c ERROR incorrect model reported\n"
+         << "c model cost = " << wt_fmt(model_cost)
+         << " computed cost = " << wt_fmt(solCost) << "(UB = " << wt_fmt(UB())
+         << " basecost = " << wt_fmt(theWcnf->baseCost())
+         << ") difference = " << wt_fmt(model_cost - solCost) << std::endl;
   else
     cout << "c Solved: Number of falsified softs = " << nfalseSofts << "\n";
 }

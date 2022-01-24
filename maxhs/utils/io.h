@@ -87,7 +87,7 @@ inline std::ostream& operator<<(std::ostream& os, const Bound_form& bf) {
   os.setf(flags);
   return os;
 }
-const FloatFormat wt_fmt{0};
+extern FloatFormat wt_fmt;
 const FloatFormat time_fmt{};
 const FloatFormat fix4_fmt{};
 
